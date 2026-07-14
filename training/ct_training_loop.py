@@ -139,7 +139,7 @@ def training_loop(
     torch.backends.cudnn.benchmark = cudnn_benchmark
 
     # Enable these to speed up on A100 GPUs
-    print('enable_tf32', enable_tf32)
+    dist.print0(f'Enable tf32: {enable_tf32}')
     torch.backends.cudnn.allow_tf32 = enable_tf32
     torch.backends.cuda.matmul.allow_tf32 = enable_tf32
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = enable_tf32
@@ -170,14 +170,14 @@ def training_loop(
     augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs) if augment_kwargs is not None else None # training.augment.AugmentPipe
     
     # Automatic Mixed Precision
-    dist.print0(f'GradScaler enabled: {enable_amp} for mixed preicision training')
+    dist.print0(f'GradScaler enabled: {enable_amp} for mixed precision training')
     if enable_amp:
         # https://pytorch.org/tutorials/recipes/recipes/amp_recipe.html#adding-gradscaler
         # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-accumulation
-        dist.print0(f'Setting up GradScaler...')
+        dist.print0('Setting up GradScaler...')
         scaler = torch.cuda.amp.GradScaler()
-        dist.print0(f'Loss scaling is overwritten when GradScaler is enabled')
-    
+        dist.print0('Loss scaling is overwritten when GradScaler is enabled')
+
     dist.print0('Setting up DDP...')
     ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device], broadcast_buffers=False)
     ema = copy.deepcopy(net).eval().requires_grad_(False)
@@ -209,7 +209,7 @@ def training_loop(
         optimizer.load_state_dict(data['optimizer_state'])
         if enable_amp:
             if 'gradscaler_state' in data:
-                # NOTE(aiihn): Although not loading the state_dict of the GradScaler works well, 
+                # NOTE(aiihn): Although not loading the state_dict of the GradScaler works well,
                 # loading it can improve reproducibility.
                 dist.print0(f'Loading GradScaler state from "{resume_state_dump}"...')
                 scaler.load_state_dict(data['gradscaler_state'])
@@ -275,22 +275,28 @@ def training_loop(
                     scaler.scale(loss.mean()).backward()
                 else:
                     loss.mul(loss_scaling).mean().backward()
-        
+
+        # Unscale first so GradScaler can detect non-finite gradients before
+        # they are sanitized below. scaler.step() will still skip the update
+        # when unscale_() records an overflow.
+        if enable_amp:
+            scaler.unscale_(optimizer)
+
         # NOTE(aiihn & Gsunshine): This should be further tested for AMP.
         for param in net.parameters():
             if param.grad is not None:
                 torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
-        
+
         # LR scheduler (if needed in the future)
         # for g in optimizer.param_groups:
         #     g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
- 
+
         # Update weights.
         if enable_amp:
             scaler.step(optimizer)
             scaler.update()
         else:
-           optimizer.step()
+            optimizer.step()
 
         # Update EMA.
         if ema_halflife_kimg is not None:

@@ -1,0 +1,24 @@
+Day 1 CIFAR-10 dataset verification
+===================================
+Source: https://dataset.bj.bcebos.com/cifar/cifar-10-python.tar.gz
+Source path: /mnt/ect_project/datasets/cifar-10-python.tar.gz
+Source size: 170498071 bytes
+Source MD5: c58f30108f718f92721af3b95e74349a
+Source SHA256: 6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce
+MD5 check: PASS
+tar gzip integrity: PASS
+
+EDM ZIP path: /mnt/ect_project/datasets/cifar10-32x32.zip
+EDM ZIP size: 166000134 bytes
+EDM ZIP SHA256: 2d4056e80de1a96fe16f2f58945c6c4710ecd9fc02e3cc7aa5b50513b7cdf389
+Expected ZIP SHA256 match: PASS
+ZipFile.testzip(): None
+PNG count: 50000
+dataset.json present: True
+dataset.json label count: 50000
+Random image 00025/img00025247.png: 32x32 RGB
+Random image 00049/img00049673.png: 32x32 RGB
+Random image 00027/img00027562.png: 32x32 RGB
+ImageFolderDataset length: 50000
+DataLoader image batch shape: (4, 3, 32, 32)
+Dataset validation: PASS

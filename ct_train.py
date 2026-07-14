@@ -78,8 +78,9 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--fp16',          help='Enable mixed-precision training', metavar='BOOL',            type=bool, default=False, show_default=True)
 @click.option('--tf32',          help='Enable tf32 for A100/H100 training speed', metavar='BOOL',   type=bool, default=False, show_default=True)
 @click.option('--ls',            help='Loss scaling', metavar='FLOAT',                              type=click.FloatRange(min=0, min_open=True), default=1, show_default=True)
-@click.option('--enable_amp', '--amp', 'enable_amp', help='Enable torch.cuda.amp.GradScaler for mixed precision training, \
-        NOTE overwritting loss_scale set by --ls', metavar='BOOL',                                  type=bool, default=False, show_default=True)
+@click.option('--enable_amp', '--amp', '--enable_gradscaler', 'enable_amp',
+              help='Enable torch.cuda.amp.GradScaler; overrides loss scaling set by --ls',
+              metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--bench',         help='Enable cuDNN benchmarking', metavar='BOOL',                  type=bool, default=True, show_default=True)
 @click.option('--cache',         help='Cache dataset in CPU memory', metavar='BOOL',                type=bool, default=True, show_default=True)
 @click.option('--workers',       help='DataLoader worker processes', metavar='INT',                 type=click.IntRange(min=1), default=1, show_default=True)
