@@ -161,10 +161,19 @@ cython_debug/
 
 
 # Project-related
-datasets
-
-ct-runs
-ct-evals
+datasets/
+runs/
+checkpoints/
+ct-runs/
+ct-evals/
+wandb/
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.zip
+*.pyc
 
 slurm*
 debug.sh

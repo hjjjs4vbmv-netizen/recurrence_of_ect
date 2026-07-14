@@ -380,7 +380,7 @@ def training_loop(
             del images
     
         # Evaluation
-        if (eval_ticks is not None) and (done or cur_tick % eval_ticks == 0) and cur_tick > 0:
+        if metrics and (eval_ticks is not None) and (done or cur_tick % eval_ticks == 0) and cur_tick > 0:
             dist.print0('Evaluating models...')
             result_dict = metric_main.calc_metric(metric='fid50k_full', 
                     generator_fn=generator_fn, G=ema, G_kwargs={},
