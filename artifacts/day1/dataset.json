@@ -1,0 +1,12 @@
+{
+  "bytes": 166000134,
+  "images": 50000,
+  "labels": true,
+  "path": "/root/recurrence_of_ect/datasets/cifar10-32x32.zip",
+  "resolution": [
+    32,
+    32
+  ],
+  "sha256": "45e772cbbcb4ebb8657d383557fba2fd24cb929aeaab99fe1963b1462377da9d",
+  "type": "dataset"
+}

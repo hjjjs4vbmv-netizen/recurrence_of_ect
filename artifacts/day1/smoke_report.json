@@ -1,0 +1,35 @@
+{
+  "git_commit": "4311059770f54821d151a9b0e1f76770a5f3930e",
+  "runs": [
+    {
+      "last_progress_kimg": 1.0,
+      "latest_snapshot_bytes": 223162320,
+      "latest_state_bytes": 669427946,
+      "numbered_snapshots": [
+        "network-snapshot-000001.pkl"
+      ],
+      "numbered_states": [
+        "training-state-000001.pt"
+      ],
+      "path": "/root/recurrence_of_ect/runs/day1-smoke/43110597-20260714T104019Z/fresh-100steps",
+      "resumed": false,
+      "total_kimg": 1
+    },
+    {
+      "last_progress_kimg": 2.0,
+      "latest_snapshot_bytes": 223162160,
+      "latest_state_bytes": 669427946,
+      "numbered_snapshots": [
+        "network-snapshot-000001.pkl"
+      ],
+      "numbered_states": [
+        "training-state-000001.pt"
+      ],
+      "path": "/root/recurrence_of_ect/runs/day1-smoke/43110597-20260714T104019Z/resume-100steps",
+      "resumed": true,
+      "total_kimg": 2
+    }
+  ],
+  "smoke_steps_per_phase": 100,
+  "status": "passed"
+}
