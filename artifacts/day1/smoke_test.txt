@@ -1,0 +1,19 @@
+Day 1 bootstrap smoke-test verification
+=======================================
+Date: 2026-07-15 (Asia/Shanghai)
+Branch: leader/day1-bootstrap
+
+Checks:
+- Python source compilation: PASS
+- Project module imports in the ect Conda environment: PASS
+- CUDA availability: PASS (NVIDIA A100-PCIE-40GB)
+- training_loop enable_amp parameter: PASS
+- --enable_amp=True dry-run: PASS
+- --amp=True compatibility alias dry-run: PASS
+- --enable_gradscaler=True compatibility alias dry-run: PASS
+- --metrics none parsed as an empty metric list: PASS
+- CIFAR-10 EDM ZIP SHA256: 2d4056e80de1a96fe16f2f58945c6c4710ecd9fc02e3cc7aa5b50513b7cdf389
+- ImageFolderDataset load: PASS (50000 RGB images, 32x32, uint8)
+- Git whitespace/error check: PASS
+
+No full training or FID run was performed as part of this bootstrap smoke test.

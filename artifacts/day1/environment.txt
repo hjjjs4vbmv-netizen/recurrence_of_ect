@@ -1,0 +1,24 @@
+Day 1 environment verification
+==============================
+Python: 3.9.18
+PyTorch: 2.3.0
+CUDA runtime: 12.1
+CUDA available: True
+GPU: NVIDIA A100-PCIE-40GB
+diffusers: 0.26.3
+accelerate: 0.27.2
+huggingface_hub: 0.23.4
+
+Import checks:
+click: OK
+requests: OK
+PIL: OK
+numpy: OK
+scipy: OK
+psutil: OK
+tqdm: OK
+imageio: OK
+pyspng: OK
+diffusers: OK
+accelerate: OK
+huggingface_hub: OK

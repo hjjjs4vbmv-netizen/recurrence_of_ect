@@ -2,7 +2,7 @@
 
 Pytorch implementation for [Easy Consistency Tuning (ECT)](https://www.notion.so/gsunshine/Consistency-Models-Made-Easy-954205c0b4a24c009f78719f43b419cc).
 
-ECT unlocks state-of-the-art (SoTA) few-step generative abilities through a simple yet principled approach. 
+ECT unlocks state-of-the-art (SoTA) few-step generative abilities through a simple yet principled approach.
 With minimal tuning costs, ECT demonstrates promising early results and scales with training FLOPs and model sizes.
 
 Try your own [Consistency Models](https://arxiv.org/abs/2303.01469)! You only need to fine-tune a bit. :D
@@ -13,7 +13,7 @@ Try your own [Consistency Models](https://arxiv.org/abs/2303.01469)! You only ne
 
 ## Introduction
 
-This repository is organized in a multi-branch structure, with each branch offering a minimal implementation for a specific purpose. 
+This repository is organized in a multi-branch structure, with each branch offering a minimal implementation for a specific purpose.
 The current branches support the following training protocols:
 
 - `main`: ECT on CIFAR-10. Best for understanding CMs and fast prototyping.
@@ -44,7 +44,7 @@ Prepare the dataset in the EDM's format. See a reference [here](https://github.c
 
 ## Training
 
-Run the following command to tune your SoTA 2-step ECM and match Consistency Distillation (CD) within 1 A100 GPU hour. 
+Run the following command to tune your SoTA 2-step ECM and match Consistency Distillation (CD) within 1 A100 GPU hour.
 
 ```bash
 bash run_ecm_1hour.sh 1 <PORT> --desc bs128.1hour
@@ -67,7 +67,7 @@ To enable fp16 and GradScaler, add the following arguments to your script:
 bash run_ecm_1hour.sh 1 <PORT> --desc bs128.1hour --fp16=True --enable_amp=True
 ```
 
-For more information, please refer to this [PR](https://github.com/locuslab/ect/pull/13). 
+For more information, please refer to this [PR](https://github.com/locuslab/ect/pull/13).
 Full support for Automatic Mixed Precision (AMP) will be added later.
 
 ## Evaluation
@@ -139,4 +139,3 @@ Feel free to drop me an email at zhengyanggeng@gmail.com if you have additional 
   year={2024}
 }
 ```
-
