@@ -169,3 +169,5 @@ ct-evals
 slurm*
 debug.sh
 *.out
+
+checkpoints
