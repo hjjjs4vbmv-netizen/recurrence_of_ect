@@ -171,3 +171,5 @@ debug.sh
 *.out
 
 checkpoints
+
+checkpoints/*.pkl
