@@ -50,18 +50,21 @@ def seeded_inputs(seeds, shape, intermediate_steps):
 
 def generate_uint8(net, seeds, nfe, mid_t, batch_size, device):
     shape = (net.img_channels, net.img_resolution, net.img_resolution)
-    batches = []
+    images = []
     for start in range(0, len(seeds), batch_size):
         batch_seeds = seeds[start:start + batch_size]
-        latents, step_noises = seeded_inputs(batch_seeds, shape, nfe - 1)
-        images = generator_fn(
-            net,
-            latents.to(device),
-            mid_t=None if nfe == 1 else [mid_t],
-            step_noises=[noise.to(device) for noise in step_noises],
-        )
-        batches.append(images.cpu())
-    images = torch.cat(batches).numpy()
+        # Keep model forwards at batch=1. cuDNN may select different convolution
+        # plans for different batch shapes, which can change quantized pixels.
+        for seed in batch_seeds:
+            latents, step_noises = seeded_inputs([seed], shape, nfe - 1)
+            image = generator_fn(
+                net,
+                latents.to(device),
+                mid_t=None if nfe == 1 else [mid_t],
+                step_noises=[noise.to(device) for noise in step_noises],
+            )
+            images.append(image.cpu())
+    images = torch.cat(images).numpy()
     return np.rint((images + 1) * 127.5).clip(0, 255).astype(np.uint8)
 
 
@@ -143,6 +146,7 @@ def main():
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
         "image_format": "32x32 RGB" if net.img_resolution == 32 and net.img_channels == 3 else f"{net.img_resolution}x{net.img_resolution} channels={net.img_channels}",
         "batch_sizes_verified": [args.batch_size, args.verify_batch_size],
+        "model_forward_batch_size": 1,
         "batch_independent_sha256": True,
     }
     metadata_path = args.outdir / "metadata.json"

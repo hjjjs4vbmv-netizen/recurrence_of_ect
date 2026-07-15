@@ -15,7 +15,10 @@ class DummyNet(torch.nn.Module):
 
     def forward(self, x, sigma, class_labels=None):
         del sigma, class_labels
-        return torch.tanh(x / 80)
+        # Deliberately depend on the forward batch composition. The fixed-seed
+        # sampler must still be invariant to its outer work-group size.
+        batch_term = x.mean(dim=0, keepdim=True) * 0.01
+        return torch.tanh((x + batch_term) / 80)
 
 
 class FixedSeedSamplingTest(unittest.TestCase):
