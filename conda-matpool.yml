@@ -1,0 +1,18 @@
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+
+# Matpool's default channel alias may redirect community channels to mirror
+# paths that do not exist (notably the `nvidia` channel). Keep named channels
+# on Anaconda.org while retaining fast mainland mirrors for defaults.
+channel_alias: https://conda.anaconda.org
+default_channels:
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r
+
+show_channel_urls: true
+default_threads: 1
+fetch_threads: 1
+verify_threads: 1
+execute_threads: 1
