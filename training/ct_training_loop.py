@@ -17,6 +17,44 @@ from metrics import metric_main
 
 #----------------------------------------------------------------------------
 
+def _atomic_write(path, writer):
+    """Write a checkpoint-side file without exposing a partial final file."""
+    tmp_path = f'{path}.tmp-{os.getpid()}'
+    try:
+        writer(tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+#----------------------------------------------------------------------------
+
+def _atomic_pickle_dump(value, path):
+    def writer(tmp_path):
+        with open(tmp_path, 'wb') as f:
+            pickle.dump(value, f)
+            f.flush()
+            os.fsync(f.fileno())
+    _atomic_write(path, writer)
+
+#----------------------------------------------------------------------------
+
+def _atomic_torch_save(value, path):
+    _atomic_write(path, lambda tmp_path: torch.save(value, tmp_path))
+
+#----------------------------------------------------------------------------
+
+def _atomic_json_dump(value, path):
+    def writer(tmp_path):
+        with open(tmp_path, 'wt', encoding='utf-8') as f:
+            json.dump(value, f, indent=2, sort_keys=True)
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+    _atomic_write(path, writer)
+
+#----------------------------------------------------------------------------
+
 def setup_snapshot_image_grid(training_set, random_seed=0):
     rnd = np.random.RandomState(random_seed)
     gw = np.clip(7680 // training_set.image_shape[2], 7, 16)
@@ -286,6 +324,8 @@ def training_loop(
         fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
         fields += [f"kimg {training_stats.report0('Progress/kimg', cur_nimg / 1e3):<9.1f}"]
         fields += [f"loss {training_stats.default_collector['Loss/loss']:<9.5f}"]
+        fields += [f"stage {training_stats.report0('Schedule/stage', stage):<4d}"]
+        fields += [f"ratio {training_stats.report0('Schedule/ratio', loss_fn.ratio):<7.5f}"]
         fields += [f"time {dnnlib.util.format_time(training_stats.report0('Timing/total_sec', tick_end_time - start_time)):<12s}"]
         fields += [f"sec/tick {training_stats.report0('Timing/sec_per_tick', tick_end_time - tick_start_time):<7.1f}"]
         fields += [f"sec/kimg {training_stats.report0('Timing/sec_per_kimg', (tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg) * 1e3):<7.2f}"]
@@ -312,13 +352,15 @@ def training_loop(
                     data[key] = value.cpu()
                 del value # conserve memory
             if dist.get_rank() == 0:
-                with open(os.path.join(run_dir, f'network-snapshot-{cur_tick:06d}.pkl'), 'wb') as f:
-                    pickle.dump(data, f)
+                _atomic_pickle_dump(data, os.path.join(run_dir, f'network-snapshot-{cur_tick:06d}.pkl'))
             del data # conserve memory
 
         # Save full dump of the training state.
         if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
-            torch.save(dict(net=net, optimizer_state=optimizer.state_dict()), os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'))
+            _atomic_torch_save(
+                dict(net=net, optimizer_state=optimizer.state_dict()),
+                os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'),
+            )
 
         # Save latest checkpoints
         if (ckpt_ticks is not None) and (done or cur_tick % ckpt_ticks == 0) and cur_tick != 0:
@@ -331,12 +373,29 @@ def training_loop(
                     data[key] = value.cpu()
                 del value # conserve memory
             if dist.get_rank() == 0:
-                with open(os.path.join(run_dir, f'network-snapshot-latest.pkl'), 'wb') as f:
-                    pickle.dump(data, f)
+                _atomic_pickle_dump(data, os.path.join(run_dir, 'network-snapshot-latest.pkl'))
             del data # conserve memory
 
             if dist.get_rank() == 0:
-                torch.save(dict(net=net, optimizer_state=optimizer.state_dict()), os.path.join(run_dir, f'training-state-latest.pt'))
+                latest_state = os.path.join(run_dir, 'training-state-latest.pt')
+                latest_snapshot = os.path.join(run_dir, 'network-snapshot-latest.pkl')
+                _atomic_torch_save(
+                    dict(net=net, optimizer_state=optimizer.state_dict()),
+                    latest_state,
+                )
+                _atomic_json_dump(
+                    dict(
+                        format_version=1,
+                        tick=cur_tick,
+                        kimg=cur_nimg / 1e3,
+                        state=os.path.basename(latest_state),
+                        snapshot=os.path.basename(latest_snapshot),
+                        state_bytes=os.path.getsize(latest_state),
+                        snapshot_bytes=os.path.getsize(latest_snapshot),
+                        timestamp=time.time(),
+                    ),
+                    os.path.join(run_dir, 'checkpoint-latest.json'),
+                )
 
         # Sample Img
         if (sample_ticks is not None) and (done or cur_tick % sample_ticks == 0) and dist.get_rank() == 0:

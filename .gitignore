@@ -166,6 +166,10 @@ checkpoints
 runs
 logs
 
+# Large training artifacts must stay on MatrixCloud persistent storage.
+training-state-*.pt
+network-snapshot-*.pkl
+
 ct-runs
 ct-evals
 

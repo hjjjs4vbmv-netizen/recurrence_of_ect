@@ -186,8 +186,27 @@ def main(**kwargs):
         match = re.fullmatch(r'training-state-(\d+|latest).pt', os.path.basename(opts.resume))
         if not match or not os.path.isfile(opts.resume):
             raise click.ClickException('--resume must point to training-state-*.pt from a previous training run')
-        c.resume_pkl = os.path.join(os.path.dirname(opts.resume), f'network-snapshot-{match.group(1)}.pkl')
-        c.resume_tick = int(match.group(1)) if opts.resume_tick is None else opts.resume_tick
+        checkpoint_id = match.group(1)
+        c.resume_pkl = os.path.join(os.path.dirname(opts.resume), f'network-snapshot-{checkpoint_id}.pkl')
+        if not os.path.isfile(c.resume_pkl):
+            raise click.ClickException(
+                f'--resume has no matching network snapshot: {c.resume_pkl}'
+            )
+        if opts.resume_tick is not None:
+            c.resume_tick = opts.resume_tick
+        elif checkpoint_id != 'latest':
+            c.resume_tick = int(checkpoint_id)
+        else:
+            manifest_path = os.path.join(os.path.dirname(opts.resume), 'checkpoint-latest.json')
+            try:
+                with open(manifest_path, 'rt', encoding='utf-8') as f:
+                    manifest = json.load(f)
+                c.resume_tick = int(manifest['tick'])
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as err:
+                raise click.ClickException(
+                    '--resume=training-state-latest.pt requires a valid '
+                    'checkpoint-latest.json or an explicit --resume-tick'
+                ) from err
         c.resume_state_dump = opts.resume
 
     # Description string.

@@ -42,6 +42,10 @@ For the team's reproducible MatrixCloud setup, dataset/checkpoint preparation,
 100-step training smoke test, and checkpoint-resume verification, follow
 [`docs/DAY1_A.md`](docs/DAY1_A.md).
 
+For config-driven experiments, automatic checkpoint recovery, run metadata,
+and the team's compact result bundle, follow
+[`docs/DAY2_A.md`](docs/DAY2_A.md).
+
 ## Datasets
 
 Prepare the dataset in the EDM's format. See a reference [here](https://github.com/NVlabs/edm?tab=readme-ov-file#preparing-datasets).

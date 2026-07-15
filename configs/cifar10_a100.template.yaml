@@ -1,0 +1,45 @@
+{
+  "format_version": 1,
+  "experiment": {
+    "name": "replace-with-experiment-name",
+    "owner": "replace-with-owner",
+    "purpose": "replace-with-testable-question"
+  },
+  "paths": {
+    "run_dir": "${ECT_RUN_DIR}",
+    "data": "${ECT_DATA_PATH}",
+    "transfer": "${ECT_TRANSFER_PATH}"
+  },
+  "launcher": {
+    "gpus": 1,
+    "port": 29501,
+    "auto_resume": true
+  },
+  "train": {
+    "--cond": false,
+    "--arch": "ddpmpp",
+    "--precond": "ect",
+    "--duration": 25.6,
+    "--batch": 128,
+    "--batch-gpu": 32,
+    "--optim": "RAdam",
+    "--lr": 0.0001,
+    "--dropout": 0.2,
+    "--augment": 0.0,
+    "--seed": 2026,
+    "--workers": 1,
+    "--cache": false,
+    "--tick": 12.8,
+    "--snap": 20,
+    "--dump": 20,
+    "--ckpt": 5,
+    "--sample_every": 20,
+    "--eval_every": 1000,
+    "--metrics": "none",
+    "--mapping": "sigmoid",
+    "--double": 250,
+    "--fp16": false,
+    "--tf32": true,
+    "--bench": true
+  }
+}
