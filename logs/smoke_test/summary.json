@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "timestamp": "20260715_143517",
+  "note": "Artifacts under /root/ect_day1_artifacts because /mnt 5G quota is full",
+  "schedule": {
+    "ratio": 0.99609375,
+    "r_over_t_mean": 0.9863709211349487
+  },
+  "stopgrad_dropout": {
+    "dropout_mismatch": 0.01544302236288786,
+    "grad_norm": 1364.782958984375
+  },
+  "edm_sample": {
+    "path": "/root/ect_day1_artifacts/samples/edm_seed_grid.png",
+    "seed": 0,
+    "heun_steps": 18,
+    "repo_mirror": "FAILED ([Errno 122] Disk quota exceeded)"
+  },
+  "smoke": {
+    "smoke_run": "/tmp/ect_day1_smoke/00000-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-day1_smoke",
+    "state": "/tmp/ect_day1_smoke/00000-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-day1_smoke/training-state-000013.pt",
+    "snap": "/tmp/ect_day1_smoke/00000-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-day1_smoke/network-snapshot-000013.pkl",
+    "resume_ok": true
+  }
+}
