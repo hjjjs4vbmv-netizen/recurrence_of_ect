@@ -1,0 +1,18 @@
+{
+  "result_type": "preliminary_historical",
+  "historical_results_commit": "52b1f2350744af4f6fbee3142b21fea2bc62f0b1",
+  "evaluation_git_commit": "4311059770f54821d151a9b0e1f76770a5f3930e",
+  "training_git_commit": "unknown",
+  "checkpoint_path": "ct-runs/00003-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-seed42-8ksteps/network-snapshot-latest.pkl",
+  "checkpoint_sha256": "unknown",
+  "training_seed": 42,
+  "evaluation_seed": 42,
+  "training_precision": "fp32",
+  "training_updates": 8000,
+  "training_updates_source": "inferred_from_directory_name",
+  "nfe": [1, 2],
+  "mid_t": 0.821,
+  "dataset": "cifar10-32x32",
+  "gpu": "NVIDIA A100-PCIE-40GB",
+  "formal_comparable_result": false
+}
