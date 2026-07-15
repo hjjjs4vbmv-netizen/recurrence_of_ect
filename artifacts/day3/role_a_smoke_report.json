@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "test_kind": "engineering_connectivity_only",
+  "official_ect_baseline": false,
+  "git_commit": "7c638a4d1f293222ec9eb8ad86cffc03fdcb7282",
+  "branch": "role-a/clean-container-validation",
+  "gpu": "NVIDIA A100-PCIE-40GB",
+  "python": "3.9.18",
+  "pytorch": "2.3.0",
+  "cuda": "12.1",
+  "dataset_path": "/mnt/ect_project/datasets/cifar10-32x32.zip",
+  "dataset_validation": "passed",
+  "checkpoint_path": "/mnt/ect_project/pretrained/edm-cifar10-32x32-uncond-vp.pkl",
+  "checkpoint_sha256": "4d5dcc1f1d0d41c8934ad21626eeddbdc0460182becf9fc059a0631b1eedb4da",
+  "check_only": "passed",
+  "dry_run": "passed",
+  "fresh_updates": 100,
+  "resume_updates": 100,
+  "fresh_progress_kimg": 1.0,
+  "resume_progress_kimg": 2.0,
+  "fp16": true,
+  "amp_enabled": true,
+  "metrics": [],
+  "formal_metrics_called": false,
+  "gradscaler_saved": true,
+  "gradscaler_restored": true,
+  "gradscaler_state": {
+    "fresh": {
+      "scale": 8192.0,
+      "growth_tracker": 31
+    },
+    "resume": {
+      "scale": 8192.0,
+      "growth_tracker": 131
+    },
+    "resume_growth_tracker_increment": 100
+  },
+  "loss_finite": true,
+  "loss_means": {
+    "fresh": [11.838935947418213, 17.023774967267357],
+    "resume": [16.92818015435338]
+  },
+  "wall_time_seconds": 180,
+  "peak_vram_mib": 5563,
+  "peak_reserved_vram_mib": 5616,
+  "run_directory": "/mnt/ect_project/runs/engineering-smoke/7c638a4d-20260715T083443Z",
+  "fresh_snapshot": "fresh-100steps/network-snapshot-000001.pkl",
+  "fresh_training_state": "fresh-100steps/training-state-000001.pt",
+  "resume_snapshot": "resume-100steps/network-snapshot-000001.pkl",
+  "resume_training_state": "resume-100steps/training-state-000001.pt",
+  "all_outputs_persistent": true,
+  "observations": [
+    "Fresh and resume stats.jsonl contain only finite Loss/loss means.",
+    "The console prints a NaN before training_stats.default_collector.update() at the initialization and resume-final maintenance points; this is a reporting-order artifact, not a non-finite recorded training loss.",
+    "The resume log explicitly records loading GradScaler state from the fresh training state."
+  ],
+  "unresolved_issues": [
+    "env.yml does not explicitly pin huggingface-hub==0.23.4 even though scripts/check_environment.py enforces that exact version."
+  ],
+  "final_status": "passed"
+}
