@@ -1,0 +1,43 @@
+Usage: ct_eval.py [OPTIONS]
+
+  Train ECMs using the techniques described in the  blog "Consistency Models
+  Made Easy".
+
+Options:
+  --outdir DIR              Where to save the results  [required]
+  --data ZIP|DIR            Path to the dataset  [required]
+  --cond BOOL               Train class-conditional model  [default: False]
+  --arch ddpmpp|ncsnpp|adm  Network architecture  [default: ddpmpp]
+  --precond vp|ve|edm       Preconditioning & loss function  [default: ct]
+  --cbase INT               Channel multiplier  [default: varies]
+  --cres LIST               Channels per resolution  [default: varies]
+  --dropout FLOAT           Dropout probability  [default: 0.13; 0<=x<=1]
+  --augment FLOAT           Augment probability  [default: 0.12; 0<=x<=1]
+  --xflip BOOL              Enable dataset x-flips  [default: False]
+  --mean FLOAT              P_mean of Log Normal Distribution  [default: -1.1;
+                            x<=None]
+  --std FLOAT               P_std of Log Normal Distribution  [default: 2.0;
+                            x<=None]
+  --scheduler STR           Type of consistency scheduler  [default: sigmoid]
+  --double TICKS            How often to save latest checkpoints  [default:
+                            500; x>=1]
+  -q FLOAT                  Decay Factor  [default: 1.4; x>0]
+  -c FLOAT                  Constant c for Huber Loss  [default: 0.0; x<=None]
+  -k FLOAT                  Consistency condition hyperparams.  [default: 8.0;
+                            x<=None]
+  -b FLOAT                  Consistency condition hyperparams.  [default: 1.0;
+                            x<=None]
+  --cut FLOAT               Cutoff value.  [default: 4.0; x<=None]
+  --fp16 BOOL               Enable mixed-precision training  [default: False]
+  --bench BOOL              Enable cuDNN benchmarking  [default: True]
+  --cache BOOL              Cache dataset in CPU memory  [default: True]
+  --workers INT             DataLoader worker processes  [default: 1; x>=1]
+  --desc STR                String to include in result dir name
+  --nosubdir                Do not create a subdirectory for results
+  --seed INT                Random seed  [default: random]
+  --resume PKL|URL          Load network pickle
+  -n, --dry_run             Print training options and exit
+  --mid_t FLOAT             Sampler steps [default: 0.821]
+  --metrics LIST            Comma-separated list or "none" [default:
+                            fid50k_full]
+  --help                    Show this message and exit.

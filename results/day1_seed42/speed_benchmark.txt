@@ -1,0 +1,24 @@
+Checkpoint: ct-runs/00003-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-seed42-8ksteps/network-snapshot-latest.pkl
+GPU: NVIDIA A100-PCIE-40GB
+Torch: 2.3.0+cu121
+cuDNN: 8902
+
+NFE=1
+  batch_size: 128
+  repeats: 30
+  total_images: 3840
+  total_seconds: 3.341830
+  ms_per_batch: 111.394
+  ms_per_image: 0.870
+  images_per_second: 1149.071
+  peak_memory_GB: 1.542
+
+NFE=2, mid_t=0.821
+  batch_size: 128
+  repeats: 30
+  total_images: 3840
+  total_seconds: 6.696757
+  ms_per_batch: 223.225
+  ms_per_image: 1.744
+  images_per_second: 573.412
+  peak_memory_GB: 1.542

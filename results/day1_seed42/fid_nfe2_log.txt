@@ -1,0 +1,64 @@
+Loading dataset...
+Constructing network...
+/root/Downloads/recurrence_of_ect/training/networks.py:85: UserWarning: Plan failed with a cudnnException: CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR: cudnnFinalize Descriptor Failed cudnn_status: CUDNN_STATUS_NOT_SUPPORTED (Triggered internally at ../aten/src/ATen/native/cudnn/Conv_v8.cpp:919.)
+  x = torch.nn.functional.conv2d(x, f.tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=f_pad)
+
+ECMPrecond                Parameters  Buffers  Output shape        Datatype
+---                       ---         ---      ---                 ---     
+model.map_noise           -           -        [512, 128]          float32 
+model.map_layer0          66048       -        [512, 512]          float32 
+model.map_layer1          262656      -        [512, 512]          float32 
+model.enc.32x32_conv      3584        -        [512, 128, 32, 32]  float32 
+model.enc.32x32_block0    1050368     -        [512, 256, 32, 32]  float32 
+model.enc.32x32_block1    1312512     -        [512, 256, 32, 32]  float32 
+model.enc.32x32_block2    1312512     -        [512, 256, 32, 32]  float32 
+model.enc.32x32_block3    1312512     -        [512, 256, 32, 32]  float32 
+model.enc.16x16_down      1378304     8        [512, 256, 16, 16]  float32 
+model.enc.16x16_block0    1576192     -        [512, 256, 16, 16]  float32 
+model.enc.16x16_block1    1576192     -        [512, 256, 16, 16]  float32 
+model.enc.16x16_block2    1576192     -        [512, 256, 16, 16]  float32 
+model.enc.16x16_block3    1576192     -        [512, 256, 16, 16]  float32 
+model.enc.8x8_down        1378304     8        [512, 256, 8, 8]    float32 
+model.enc.8x8_block0      1312512     -        [512, 256, 8, 8]    float32 
+model.enc.8x8_block1      1312512     -        [512, 256, 8, 8]    float32 
+model.enc.8x8_block2      1312512     -        [512, 256, 8, 8]    float32 
+model.enc.8x8_block3      1312512     -        [512, 256, 8, 8]    float32 
+model.dec.8x8_in0         1576192     -        [512, 256, 8, 8]    float32 
+model.dec.8x8_in1         1312512     -        [512, 256, 8, 8]    float32 
+model.dec.8x8_block0      2034176     -        [512, 256, 8, 8]    float32 
+model.dec.8x8_block1      2034176     -        [512, 256, 8, 8]    float32 
+model.dec.8x8_block2      2034176     -        [512, 256, 8, 8]    float32 
+model.dec.8x8_block3      2034176     -        [512, 256, 8, 8]    float32 
+model.dec.8x8_block4      2034176     -        [512, 256, 8, 8]    float32 
+model.dec.16x16_up        1378304     8        [512, 256, 16, 16]  float32 
+model.dec.16x16_block0    2034176     -        [512, 256, 16, 16]  float32 
+model.dec.16x16_block1    2034176     -        [512, 256, 16, 16]  float32 
+model.dec.16x16_block2    2034176     -        [512, 256, 16, 16]  float32 
+model.dec.16x16_block3    2034176     -        [512, 256, 16, 16]  float32 
+model.dec.16x16_block4    2297856     -        [512, 256, 16, 16]  float32 
+model.dec.32x32_up        1378304     8        [512, 256, 32, 32]  float32 
+model.dec.32x32_block0    2034176     -        [512, 256, 32, 32]  float32 
+model.dec.32x32_block1    2034176     -        [512, 256, 32, 32]  float32 
+model.dec.32x32_block2    2034176     -        [512, 256, 32, 32]  float32 
+model.dec.32x32_block3    2034176     -        [512, 256, 32, 32]  float32 
+model.dec.32x32_block4    1706240     -        [512, 256, 32, 32]  float32 
+model.dec.32x32_aux_norm  512         -        [512, 256, 32, 32]  float32 
+model.dec.32x32_aux_conv  6915        -        [512, 3, 32, 32]    float32 
+model                     1152        -        [512, 3, 32, 32]    float32 
+<top-level>               -           -        [512, 3, 32, 32]    float32 
+---                       ---         ---      ---                 ---     
+Total                     55733891    32       -                   -       
+
+Loading network weights from "ct-runs/00003-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-seed42-8ksteps/network-snapshot-latest.pkl"...
+Exporting sample images...
+/root/Downloads/recurrence_of_ect/ct_eval.py:270: DeprecationWarning: 'mode' parameter is deprecated and will be removed in Pillow 13 (2026-10-15)
+  PIL.Image.fromarray(img, 'RGB').save(fname)
+Exporting final sample images...
+Evaluating few-step generation...
+/root/miniconda3/envs/ect/lib/python3.9/site-packages/torch/nn/modules/module.py:1541: UserWarning: Plan failed with a cudnnException: CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR: cudnnFinalize Descriptor Failed cudnn_status: CUDNN_STATUS_NOT_SUPPORTED (Triggered internally at ../aten/src/ATen/native/cudnn/Conv_v8.cpp:919.)
+  return forward_call(*args, **kwargs)
+{"results": {"fid50k_full": 2.7061176696974125}, "metric": "fid50k_full", "total_time": 199.15207314491272, "total_time_str": "3m 19s", "num_gpus": 1, "snapshot_pkl": "../../ct-runs/00003-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-seed42-8ksteps/network-snapshot-latest.pkl", "timestamp": 1784096042.6219056}
+{"results": {"fid50k_full": 2.724587919363516}, "metric": "fid50k_full", "total_time": 191.186096906662, "total_time_str": "3m 11s", "num_gpus": 1, "snapshot_pkl": "../../ct-runs/00003-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-seed42-8ksteps/network-snapshot-latest.pkl", "timestamp": 1784096233.8094022}
+{"results": {"fid50k_full": 2.6761110851193552}, "metric": "fid50k_full", "total_time": 194.74878549575806, "total_time_str": "3m 15s", "num_gpus": 1, "snapshot_pkl": "../../ct-runs/00003-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-seed42-8ksteps/network-snapshot-latest.pkl", "timestamp": 1784096428.558812}
+
+Exiting...
