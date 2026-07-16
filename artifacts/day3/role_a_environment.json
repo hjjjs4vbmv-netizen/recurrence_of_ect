@@ -1,8 +1,18 @@
 {
-  "schema_version": 1,
-  "git_commit": "7c638a4d1f293222ec9eb8ad86cffc03fdcb7282",
+  "schema_version": 2,
   "branch": "role-a/clean-container-validation",
+  "tested_code_sha": "956c6f41390e9e26885e689eb4c3b66d45957c38",
+  "pr_head_sha_at_validation": "956c6f41390e9e26885e689eb4c3b66d45957c38",
   "git_dirty": false,
+  "environment_name": "ect-clean-validation",
+  "environment_creation_command": "bash setup_env.sh --name ect-clean-validation",
+  "environment_created_from_scratch": true,
+  "manual_pip_install": false,
+  "environment_specification": {
+    "file": "env.yml",
+    "huggingface_hub_pin": "huggingface-hub==0.23.4",
+    "validation_spec_matches_environment_spec": true
+  },
   "gpu": {
     "name": "NVIDIA A100-PCIE-40GB",
     "count": 1,
@@ -13,19 +23,40 @@
   "cuda": "12.1",
   "environment_validation": "passed",
   "package_versions": {
+    "Pillow": "11.3.0",
     "accelerate": "0.27.2",
+    "click": "8.1.8",
     "diffusers": "0.26.3",
     "huggingface-hub": "0.23.4",
-    "numpy": "1.26.4",
-    "scipy": "1.12.0",
-    "torch": "2.3.0"
+    "imageio": "2.37.0",
+    "imageio-ffmpeg": "0.6.0",
+    "numpy": "2.0.2",
+    "psutil": "7.0.0",
+    "pyspng": "0.1.4",
+    "requests": "2.32.5",
+    "scipy": "1.13.1",
+    "torch": "2.3.0",
+    "tqdm": "4.67.1"
   },
+  "validation_commands": [
+    "bash setup_env.sh --name ect-clean-validation",
+    "conda run -n ect-clean-validation python --version",
+    "conda run -n ect-clean-validation python -c \"import huggingface_hub; print(huggingface_hub.__version__)\"",
+    "ECT_ENV_NAME=ect-clean-validation bash prepare_data.sh --check-only",
+    "ECT_ENV_NAME=ect-clean-validation bash download_checkpoint.sh --check-only",
+    "ECT_ENV_NAME=ect-clean-validation bash scripts/smoke_engineering_100steps.sh --check-only",
+    "ECT_ENV_NAME=ect-clean-validation bash scripts/smoke_engineering_100steps.sh --dry-run --port 29521",
+    "ECT_ENV_NAME=ect-clean-validation bash scripts/smoke_engineering_100steps.sh --port 29521"
+  ],
   "dataset_path": "/mnt/ect_project/datasets/cifar10-32x32.zip",
   "dataset_validation": {
     "status": "passed",
     "images": 50000,
     "labels": 50000,
-    "resolution": [32, 32],
+    "resolution": [
+      32,
+      32
+    ],
     "color_mode": "RGB",
     "zip_crc_ok": true,
     "sha256": "08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372",
@@ -34,6 +65,7 @@
   "checkpoint_path": "/mnt/ect_project/pretrained/edm-cifar10-32x32-uncond-vp.pkl",
   "checkpoint_sha256": "4d5dcc1f1d0d41c8934ad21626eeddbdc0460182becf9fc059a0631b1eedb4da",
   "checkpoint_validation": "passed",
-  "environment_adjustment": "The pre-existing ect environment had huggingface-hub 0.20.3 from the superseded branch. It was upgraded to the main-branch-required 0.23.4 before the final setup_env.sh validation.",
+  "unresolved_issues": [],
+  "evidence_note": "The validation ran on the code SHA above. The subsequent evidence-only commit changes only the three compact evidence files; the final PR head is recorded in PR #8 metadata and its validation summary comment.",
   "final_status": "passed"
 }
