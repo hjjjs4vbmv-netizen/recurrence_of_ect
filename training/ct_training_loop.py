@@ -14,6 +14,15 @@ from torch_utils import training_stats
 from torch_utils import misc
 
 from metrics import metric_main
+from training.schedules import continuous_stage
+
+#----------------------------------------------------------------------------
+
+def _schedule_stage(schedule_name, cur_tick, double_ticks):
+    """Return the legacy integer stage unless a continuous schedule is explicit."""
+    if schedule_name == 'adaptive_v1':
+        return continuous_stage(cur_tick=cur_tick, double_ticks=double_ticks)
+    return cur_tick // double_ticks
 
 #----------------------------------------------------------------------------
 
@@ -250,13 +259,18 @@ def training_loop(
     stats_jsonl = None
 
     # Prepare for the mapping fn p(r|t).
-    dist.print0(f'Reduce dt every {double_ticks} ticks.')
+    schedule_name = getattr(getattr(loss_fn, 'schedule', None), 'name', None)
+    continuous_schedule = schedule_name == 'adaptive_v1'
+    if continuous_schedule:
+        dist.print0(f'Reduce dt continuously over {double_ticks} ticks per stage.')
+    else:
+        dist.print0(f'Reduce dt every {double_ticks} ticks.')
     
     def update_scheduler(loss_fn):
         loss_fn.update_schedule(stage)
         dist.print0(f'Update scheduler at {cur_tick} ticks, {cur_nimg / 1e3} kimg, ratio {loss_fn.ratio}')
         
-    stage = cur_tick // double_ticks
+    stage = _schedule_stage(schedule_name, cur_tick, double_ticks)
     update_scheduler(loss_fn)
 
     while True:
@@ -419,8 +433,12 @@ def training_loop(
             break
         
         # Update Scheduler
-        new_stage = (cur_tick-1) // double_ticks
-        if new_stage > stage:
+        if continuous_schedule:
+            new_stage = _schedule_stage(schedule_name, cur_tick, double_ticks)
+        else:
+            # Preserve the official const/sigmoid boundary behavior exactly.
+            new_stage = _schedule_stage(schedule_name, cur_tick - 1, double_ticks)
+        if continuous_schedule or new_stage > stage:
             stage = new_stage
             update_scheduler(loss_fn)
     

@@ -146,11 +146,10 @@ class AdaptiveV1Schedule(SigmoidSchedule):
     sigmoid schedule, pinning its behavior to the baseline at every stage
     start.
 
-    Usable today via ECMLoss(adj='adaptive_v1'); however ct_train.py's
-    --mapping choices and the integer stage passed by
-    training/ct_training_loop.py (both protected files) are unchanged, so
-    enabling it end-to-end in training needs a follow-up PR — see
-    continuous_stage() and docs/SCHEDULES.md.
+    Select it with ``--schedule adaptive_v1`` (or the legacy-compatible
+    ``--mapping adaptive_v1`` alias). The training loop then supplies a
+    fractional stage once per tick; const/sigmoid keep the official integer
+    stage behavior.
     """
 
     def compute_r(self, t, stage):

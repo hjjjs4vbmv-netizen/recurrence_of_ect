@@ -27,8 +27,9 @@ r = compute_r(t=t, stage=stage, schedule="sigmoid", q=256, k=8, b=1)
 - `t`：任意形状的 torch 张量（训练循环里是 `[N,1,1,1]`），也接受
   python/numpy 标量或数组（内部 `torch.as_tensor` 转换）；返回同形状张量，
   恒有 `0 <= r < t`。
-- `stage`：训练循环维护的课程阶段（官方为 `cur_tick // double_ticks`）；
-  仅 `adaptive_v1` 接受小数 stage。
+- `stage`：训练循环维护的课程阶段；`const` / `sigmoid` 保持官方
+  `cur_tick // double_ticks` 的整数 stage，只有显式选择 `adaptive_v1` 时才使用
+  `cur_tick / double_ticks` 的小数 stage。
 - 超参默认与 `ct_train.py` CLI 一致：`q=2.0, k=8.0, b=1.0`。
 - 兼容 `ECMLoss` 的有状态用法：`schedule.update_schedule(stage)` 后调
   `schedule.t_to_r(t)`。
@@ -59,15 +60,26 @@ r = compute_r(t=t, stage=stage, schedule="sigmoid", q=256, k=8, b=1)
 - **性质**（均有测试）：整数 stage 处与官方 `sigmoid` **按位一致**（每个阶段
   起点锚定 baseline）；小数 stage 的 `r` 落在相邻两个整数 stage 之间；`r`
   随进度单调收紧；不引入任何新超参。
-- **接入状态**：`training/loss.py` 已接入（`ECMLoss(adj='adaptive_v1')` 在
-  loss 层即可用）；`loss_fn.ratio`/`update_schedule` 等被训练循环消费的契约
-  保持不变，`loss_fn` 随 snapshot 的 pickle 往返也有测试覆盖。
-  **尚未**接入 CLI 与训练循环（`ct_train.py` 的 `--mapping` 选项、
-  `ct_training_loop.py` 的整数 stage，均为 Day2 审计的 protected 文件）：
-  启用端到端训练还差两处一行改动——`--mapping` choices 加 `adaptive_v1`；
-  阶段更新处把 `cur_tick // double_ticks` 换成
-  `continuous_stage(cur_tick, double_ticks)` 并每个 tick 调用
-  `loss_fn.update_schedule(...)`——待队内评审后单独提交。
+- **接入状态**：`training/loss.py` 与训练循环已接入。新命令可显式使用
+  `--schedule adaptive_v1`；原有 `--mapping` 保留为完整兼容的别名。不传两者时
+  默认仍是 `sigmoid`，`const` / `sigmoid` 的整数 stage 更新路径不变；
+  只有 `adaptive_v1` 每个 tick 更新小数 stage。`loss_fn.ratio` /
+  `update_schedule` 契约和 snapshot pickle 往返保持不变。
+
+### CLI 兼容性
+
+```bash
+# 原命令：语义不变
+python ct_train.py ...
+python ct_train.py ... --mapping sigmoid
+python ct_train.py ... --mapping const
+
+# 新入口
+python ct_train.py ... --schedule adaptive_v1
+```
+
+`--schedule` 与 `--mapping` 指向同一个内部 `mapping` 字段，因此旧的配置
+传递、`loss_kwargs.adj` 和日志结构不会因参数改名而变化。
 
 ## 现有 run 配置下的 stage 行为（供对照）
 
