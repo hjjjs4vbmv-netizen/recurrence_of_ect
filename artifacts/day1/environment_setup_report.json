@@ -1,0 +1,48 @@
+{
+  "cuda": {
+    "available": true,
+    "device_count": 1,
+    "devices": [
+      "NVIDIA A100-PCIE-40GB"
+    ],
+    "runtime": "12.1"
+  },
+  "errors": [],
+  "git_branch": "main",
+  "git_commit": "93a1ffcdd76f375d82990df8ec71e67ea51fd803",
+  "git_dirty": true,
+  "imports": {
+    "PIL": "ok",
+    "accelerate": "ok",
+    "click": "ok",
+    "diffusers": "ok",
+    "huggingface_hub": "ok",
+    "imageio": "ok",
+    "numpy": "ok",
+    "psutil": "ok",
+    "pyspng": "ok",
+    "requests": "ok",
+    "scipy": "ok",
+    "torch": "ok",
+    "tqdm": "ok"
+  },
+  "packages": {
+    "Pillow": "11.3.0",
+    "accelerate": "0.27.2",
+    "click": "8.1.8",
+    "diffusers": "0.26.3",
+    "huggingface-hub": "0.23.4",
+    "imageio": "2.37.0",
+    "imageio-ffmpeg": "0.6.0",
+    "numpy": "2.0.2",
+    "psutil": "7.0.0",
+    "pyspng": "0.1.4",
+    "requests": "2.32.5",
+    "scipy": "1.13.1",
+    "torch": "2.3.0",
+    "tqdm": "4.67.1"
+  },
+  "platform": "Linux-5.15.0-56-generic-x86_64-with-glibc2.35",
+  "python": "3.9.18",
+  "status": "passed"
+}

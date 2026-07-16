@@ -1,0 +1,28 @@
+{
+  "checkpoints": [
+    {
+      "name": "edm-cifar10-32x32-uncond-vp",
+      "role": "ECT transfer teacher / official EDM CIFAR-10 unconditional VP",
+      "source_url": "https://nvlabs-fi-cdn.nvidia.com/edm/pretrained/edm-cifar10-32x32-uncond-vp.pkl",
+      "local_path": "checkpoints/edm-cifar10-32x32-uncond-vp.pkl",
+      "cache_path": "/root/.cache/dnnlib/downloads/c320a0e2338e26e7ce763402b5b56d98_https___nvlabs-fi-cdn.nvidia.com_edm_pretrained_edm-cifar10-32x32-uncond-vp.pkl",
+      "size_bytes": 223173327,
+      "size_human": "212.83 MiB",
+      "md5": "0cb62d16b8617fd703a697cc17ae422e",
+      "sha256": "4d5dcc1f1d0d41c8934ad21626eeddbdc0460182becf9fc059a0631b1eedb4da",
+      "dataset": "CIFAR-10",
+      "resolution": "32x32",
+      "conditioning": "unconditional",
+      "framework_note": "Loaded via --transfer into ECMPrecond (ema weights)"
+    }
+  ],
+  "dataset": {
+    "name": "cifar10-32x32",
+    "path": "datasets/cifar10-32x32.zip",
+    "format": "EDM/StyleGAN ZIP+PNG",
+    "num_images": 50000,
+    "resolution": 32,
+    "source_archive": "datasets/cifar-10-python.tar.gz",
+    "prepare_cmd": "python dataset_tool.py --source=datasets/cifar-10-python.tar.gz --dest=datasets/cifar10-32x32.zip"
+  }
+}
