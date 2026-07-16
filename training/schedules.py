@@ -4,8 +4,9 @@ During consistency tuning, every training pair (x_t, x_r) is built from a
 noise level t ~ p(t) and a smaller noise level r = r(t, stage) produced by a
 mapping schedule ("Consistency Models Made Easy", arXiv 2406.14548, Sec. 3.3
 and Appendix A). This module centralizes the t -> r schedules behind a single
-interface so experimental schedules can be compared against the official ones
-without touching training/loss.py.
+interface; ECMLoss in training/loss.py dispatches its t -> r entry through it
+as r = self.schedule.compute_r(t=t, stage=self.stage), while the official
+reference formulas stay verbatim in training/loss.py as the parity anchor.
 
 Supported schedules:
     'const'        Official ECT constant mapping, Eq. (17).
@@ -54,6 +55,9 @@ def available_schedules():
     return sorted(_SCHEDULES)
 
 def get_schedule(schedule, **schedule_kwargs):
+    # training/loss.py imports this by name, and torch_utils.persistence
+    # embeds that module's source into training snapshots — keep the public
+    # names in this module stable or old snapshots stop unpickling.
     if schedule not in _SCHEDULES:
         raise ValueError(f"Unknown schedule type {schedule!r}! Available: {', '.join(available_schedules())}")
     return _SCHEDULES[schedule](**schedule_kwargs)
@@ -142,9 +146,11 @@ class AdaptiveV1Schedule(SigmoidSchedule):
     sigmoid schedule, pinning its behavior to the baseline at every stage
     start.
 
-    Not wired into training/ct_training_loop.py yet (protected file); see
-    continuous_stage() and docs/SCHEDULES.md for the planned one-line
-    integration.
+    Usable today via ECMLoss(adj='adaptive_v1'); however ct_train.py's
+    --mapping choices and the integer stage passed by
+    training/ct_training_loop.py (both protected files) are unchanged, so
+    enabling it end-to-end in training needs a follow-up PR — see
+    continuous_stage() and docs/SCHEDULES.md.
     """
 
     def compute_r(self, t, stage):

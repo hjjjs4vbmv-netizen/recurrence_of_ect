@@ -1,5 +1,6 @@
 import contextlib
 import io
+import pickle
 import unittest
 
 import torch
@@ -24,12 +25,19 @@ def devices():
     return ['cpu'] + (['cuda'] if torch.cuda.is_available() else [])
 
 
-def official_t_to_r(adj, t, stage, q=2.0, k=8.0, b=1.0):
-    """Reference output straight from training/loss.py."""
+def make_loss(adj, q=2.0, k=8.0, b=1.0):
     with contextlib.redirect_stdout(io.StringIO()):  # silence dist.print0
-        loss_fn = ECMLoss(q=q, k=k, b=b, adj=adj)
+        return ECMLoss(q=q, k=k, b=b, adj=adj)
+
+
+def official_t_to_r(adj, t, stage, q=2.0, k=8.0, b=1.0):
+    """Reference output from the untouched official formulas in
+    training/loss.py (t_to_r_const / t_to_r_sigmoid), NOT from the schedule
+    dispatch, so the parity anchor stays independent of schedules.py."""
+    loss_fn = make_loss(adj, q=q, k=k, b=b)
     loss_fn.update_schedule(stage)
-    return loss_fn.t_to_r(t)
+    reference = {'const': loss_fn.t_to_r_const, 'sigmoid': loss_fn.t_to_r_sigmoid}[adj]
+    return reference(t)
 
 
 class OfficialFormulaParityTest(unittest.TestCase):
@@ -151,6 +159,80 @@ class InterfaceTest(unittest.TestCase):
     def test_invalid_q_rejected(self):
         with self.assertRaises(ValueError):
             get_schedule('const', q=1.0)
+
+
+class ECMLossIntegrationTest(unittest.TestCase):
+    """ECMLoss now dispatches t->r through training/schedules.py; the wired
+    entry must be indistinguishable from the official reference formulas."""
+
+    def test_loss_holds_matching_schedule_instance(self):
+        for adj, cls in [('const', schedules.ConstSchedule),
+                         ('sigmoid', schedules.SigmoidSchedule),
+                         ('adaptive_v1', schedules.AdaptiveV1Schedule)]:
+            with self.subTest(adj=adj):
+                self.assertIsInstance(make_loss(adj).schedule, cls)
+
+    def test_wired_entry_matches_official_reference_bitwise(self):
+        for adj in ['const', 'sigmoid']:
+            for stage in [0, 2, 5]:
+                with self.subTest(adj=adj, stage=stage):
+                    loss_fn = make_loss(adj, q=2.0, k=8.0, b=1.0)
+                    loss_fn.update_schedule(stage)
+                    t = sample_t()
+                    reference = getattr(loss_fn, f't_to_r_{adj}')(t)
+                    wired = loss_fn.schedule.compute_r(t=t, stage=loss_fn.stage)
+                    self.assertTrue(torch.equal(wired, reference))
+
+    def test_loss_hyperparams_reach_the_schedule(self):
+        loss_fn = make_loss('sigmoid', q=256.0, k=4.0, b=2.0)
+        self.assertEqual((loss_fn.schedule.q, loss_fn.schedule.k, loss_fn.schedule.b), (256.0, 4.0, 2.0))
+
+    def test_unknown_adj_still_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            make_loss('cosine')
+
+    def test_update_schedule_keeps_ratio_for_loop_logging(self):
+        # ct_training_loop.py:257 logs loss_fn.ratio; the contract must hold.
+        loss_fn = make_loss('sigmoid', q=2.0)
+        loss_fn.update_schedule(3)
+        self.assertEqual(loss_fn.ratio, 1 - 1 / 2.0 ** 4)
+
+    def test_loss_fn_pickles_with_schedule(self):
+        # Training snapshots pickle loss_fn (ct_training_loop.py:340); the
+        # schedule attribute must round-trip through persistence.
+        loss_fn = make_loss('adaptive_v1', q=2.0)
+        loss_fn.update_schedule(2)
+        clone = pickle.loads(pickle.dumps(loss_fn))
+        t = sample_t()
+        self.assertTrue(torch.equal(clone.schedule.compute_r(t=t, stage=clone.stage),
+                                    loss_fn.schedule.compute_r(t=t, stage=loss_fn.stage)))
+
+
+class TinyNet(torch.nn.Module):
+    def forward(self, x, t, labels=None, augment_labels=None):
+        return x / (1 + t)
+
+
+@unittest.skipUnless(torch.cuda.is_available(), 'ECMLoss.__call__ saves/restores CUDA RNG state (official code, unmodified)')
+class ECMLossCallCudaTest(unittest.TestCase):
+    """End-to-end __call__ checks; run on the A100 (skipped on cpu-only)."""
+
+    def full_loss(self, adj, stage, seed=0):
+        loss_fn = make_loss(adj, q=2.0, k=8.0, b=1.0)
+        loss_fn.update_schedule(stage)
+        net = TinyNet().cuda()
+        torch.manual_seed(seed)
+        images = torch.randn([8, 3, 8, 8], device='cuda')
+        torch.manual_seed(seed)  # re-seed: identical t/eps draws across calls
+        return loss_fn(net=net, images=images)
+
+    def test_call_sigmoid_equals_adaptive_v1_at_integer_stage(self):
+        self.assertTrue(torch.equal(self.full_loss('sigmoid', stage=1),
+                                    self.full_loss('adaptive_v1', stage=1)))
+
+    def test_call_adaptive_v1_fractional_stage_changes_loss(self):
+        self.assertFalse(torch.equal(self.full_loss('adaptive_v1', stage=1),
+                                     self.full_loss('adaptive_v1', stage=1.5)))
 
 
 if __name__ == '__main__':

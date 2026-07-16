@@ -5,6 +5,8 @@ import torch.nn as nn
 from torch_utils import persistence
 from torch_utils import distributed as dist
 
+from training.schedules import get_schedule
+
 #----------------------------------------------------------------------------
 # Loss function proposed in the blog "Consistency Models Made Easy"
 
@@ -15,12 +17,11 @@ class ECMLoss:
         self.P_std = P_std
         self.sigma_data = sigma_data
         
-        if adj == 'const':
-            self.t_to_r = self.t_to_r_const
-        elif adj == 'sigmoid':
-            self.t_to_r = self.t_to_r_sigmoid
-        else:
-            raise ValueError(f'Unknow schedule type {adj}!')
+        # t -> r entry point, dispatched through training/schedules.py.
+        # 'const' / 'sigmoid' are the official fixed formulas (bit-identical
+        # to the reference methods below); 'adaptive_v1' is the Role C
+        # experiment.
+        self.schedule = get_schedule(adj, q=q, k=k, b=b)
 
         self.q = q
         self.stage = 0
@@ -36,6 +37,9 @@ class ECMLoss:
         self.stage = stage
         self.ratio = 1 - 1 / self.q ** (stage+1)
 
+    # Official fixed t->r formulas, kept verbatim as the parity reference for
+    # tests/test_schedules.py; the training path dispatches through
+    # self.schedule (see __call__).
     def t_to_r_const(self, t):
         decay = 1 / self.q ** (self.stage+1)
         ratio = 1 - decay
@@ -53,7 +57,7 @@ class ECMLoss:
         # t ~ p(t) and r ~ p(r|t, iters) (Mapping fn)
         rnd_normal = torch.randn([images.shape[0], 1, 1, 1], device=images.device)
         t = (rnd_normal * self.P_std + self.P_mean).exp()
-        r = self.t_to_r(t)
+        r = self.schedule.compute_r(t=t, stage=self.stage)
 
         # Augmentation if needed
         y, augment_labels = augment_pipe(images) if augment_pipe is not None else (images, None)

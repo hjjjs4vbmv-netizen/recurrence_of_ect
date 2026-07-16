@@ -3,8 +3,11 @@
 模块：`training/schedules.py`；测试：`tests/test_schedules.py`。
 
 ECT 训练对 `(x_t, x_r)` 中 `r = r(t, stage)` 由映射调度给出（论文 arXiv 2406.14548
-第 3.3 节与附录 A）。本模块把 t→r 调度收敛到统一接口，便于在不改动
-`training/loss.py` 的前提下对比官方调度与实验调度。
+第 3.3 节与附录 A）。本模块把 t→r 调度收敛到统一接口；`ECMLoss` 的 t→r 入口
+已改为经由本模块派发（`__init__` 中 `get_schedule(adj, q=q, k=k, b=b)`，
+`__call__` 中 `r = self.schedule.compute_r(t=t, stage=self.stage)`），
+`training/loss.py` 中除该入口外的训练逻辑（ε 共享、teacher `no_grad`、
+dropout RNG 保存/恢复、损失权重、Huber 参数）逐字节未动。
 
 ## 接口
 
@@ -38,10 +41,13 @@ r = compute_r(t=t, stage=stage, schedule="sigmoid", q=256, k=8, b=1)
 | `sigmoid` | `r/t = 1 - decay * n(t)`，`n(t) = 1 + k*sigmoid(-b*t)` | 官方 Eq.(18)，训练默认，`ECMLoss.t_to_r_sigmoid` 原样移植 |
 | `adaptive_v1` | 同 `sigmoid`，但 `stage` 允许小数 | Role C 实验 v1 |
 
-**官方 fixed 公式不变的保证**：`const` / `sigmoid` 是 `training/loss.py` 公式的
-逐句移植（`training/loss.py` 本身未被改动）；
-`tests/test_schedules.py::OfficialFormulaParityTest` 对多组 `(q,k,b,stage,dtype)`
-与 `ECMLoss.t_to_r` 做**按位相等**校验，两边任何一处被改动测试都会失败。
+**官方 fixed 公式不变的保证**：官方公式方法 `t_to_r_const` / `t_to_r_sigmoid`
+**原样保留**在 `training/loss.py` 中作为 parity 基准（训练路径不再调用它们，
+仅供测试对照）；`tests/test_schedules.py::OfficialFormulaParityTest` 对多组
+`(q,k,b,stage,dtype)`（A100 上还含 cpu/cuda 两种设备）把 schedules 模块输出与
+这两个参考方法做**按位相等**校验，`ECMLossIntegrationTest` 再校验接入后的
+`self.schedule.compute_r` 入口与参考方法按位一致。任何一侧公式被改动，测试
+都会失败。
 
 ## adaptive_v1 设计（v1，待评审）
 
@@ -53,8 +59,13 @@ r = compute_r(t=t, stage=stage, schedule="sigmoid", q=256, k=8, b=1)
 - **性质**（均有测试）：整数 stage 处与官方 `sigmoid` **按位一致**（每个阶段
   起点锚定 baseline）；小数 stage 的 `r` 落在相邻两个整数 stage 之间；`r`
   随进度单调收紧；不引入任何新超参。
-- **接入**：尚未接入 `ct_training_loop.py`（Day2 审计的 protected 文件）。
-  计划的改动为一行——阶段更新处把 `cur_tick // double_ticks` 换成
+- **接入状态**：`training/loss.py` 已接入（`ECMLoss(adj='adaptive_v1')` 在
+  loss 层即可用）；`loss_fn.ratio`/`update_schedule` 等被训练循环消费的契约
+  保持不变，`loss_fn` 随 snapshot 的 pickle 往返也有测试覆盖。
+  **尚未**接入 CLI 与训练循环（`ct_train.py` 的 `--mapping` 选项、
+  `ct_training_loop.py` 的整数 stage，均为 Day2 审计的 protected 文件）：
+  启用端到端训练还差两处一行改动——`--mapping` choices 加 `adaptive_v1`；
+  阶段更新处把 `cur_tick // double_ticks` 换成
   `continuous_stage(cur_tick, double_ticks)` 并每个 tick 调用
   `loss_fn.update_schedule(...)`——待队内评审后单独提交。
 
@@ -68,6 +79,7 @@ r = compute_r(t=t, stage=stage, schedule="sigmoid", q=256, k=8, b=1)
 ## 验证
 
 ```bash
-python -m unittest tests.test_schedules -v   # 16 个用例
+python -m unittest tests.test_schedules -v   # 24 个用例；其中 2 个端到端
+                                             # __call__ 用例需 CUDA（A100 激活）
 python -m training.schedules                 # 打印三种调度的 r/t 表
 ```
