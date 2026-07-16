@@ -92,7 +92,7 @@ bash scripts/sample_checkpoint.sh <CKPT_PATH> \
   --precision fp32
 ```
 
-The output contains one 8x8 grid per NFE, `metadata.json`, `sha256_manifest.txt`, and individual seed images. Keep the individual PNG files under `/mnt`; only commit the grids, metadata, manifest, scripts, and tests.
+The output is isolated under `<outdir>/<checkpoint-stem>-<sha256-prefix>/` and contains one 8x8 grid per NFE, `metadata.json`, `sha256_manifest.txt`, and individual seed images. Keep the individual PNG files under `/mnt`; only commit the grids, metadata, manifest, scripts, and tests.
 
 The unified metric entry point supports explicit one-step or two-step evaluation through `--nfe=1` or `--nfe=2`:
 

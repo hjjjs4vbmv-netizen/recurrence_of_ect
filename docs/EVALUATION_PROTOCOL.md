@@ -24,18 +24,45 @@ implementation, and the actual forward batch size.
 
 ## Fixed-seed protocol
 
+- Seeds 0-63 denote 64 per-sample seeds, not 64 repeated metric runs.
 - Generate one 32x32 RGB PNG for each seed in 0-63.
-- Run NFE=1 and NFE=2, using `mid_t=0.821` for NFE=2.
+- NFE=1 uses `mid_t=[]`.
+- NFE=2 uses `mid_t=[0.821]`.
+- For a given seed, NFE=1 and NFE=2 use the same initial latent.
+- The NFE=2 intermediate noise is also deterministically derived from that seed.
+- The 64 images per mode are used for visualization and determinism checks.
 - Keep the model forward batch size at one.
 - Treat 8 and 16 as work-group sizes, not model batch sizes.
 - Require pixel-identical output across work-group sizes 8 and 16.
 - Repeat each NFE configuration and require pixel-identical output.
-- Isolate every result directory by the full checkpoint SHA256.
+- Isolate every result directory using the checkpoint filename and the first 12
+  characters of its SHA256.
 - Select precision explicitly. Use `fp32` for this acceptance smoke; use
   `checkpoint` only when intentionally preserving checkpoint-native precision.
 
-The sampler writes to `<outdir>/<checkpoint_sha256>/`. A run fails before
-publishing metadata if either work-group or repeated-run determinism fails.
+The sampler writes to `<outdir>/<checkpoint-stem>-<sha256-prefix>/`. For
+example, the official checkpoint is written under
+`edm-cifar10-32x32-uncond-vp-4d5dcc1f1d0d/`. A run fails before publishing
+metadata if either work-group or repeated-run determinism fails.
+
+Each checkpoint directory contains:
+
+```text
+nfe1/
+  images/
+  grid_8x8.png
+nfe2/
+  images/
+  grid_8x8.png
+metadata.json
+sha256_manifest.txt
+```
+
+The metadata schema records the evaluation Git commit, checkpoint path and
+SHA256, checkpoint ID, seed list, NFE modes, `mid_t` per mode, precision,
+device, GPU, elapsed time, image counts, generator implementation, actual
+model forward batch size, verified work-group sizes, image dimensions, and the
+overall determinism result.
 
 ## Official EDM checkpoint smoke
 
@@ -71,13 +98,13 @@ bash scripts/sample_checkpoint.sh \
 The expected output root is:
 
 ```text
-/mnt/ect_project/evaluations/4d5dcc1f1d0d41c8934ad21626eeddbdc0460182becf9fc059a0631b1eedb4da/
+/mnt/ect_project/evaluations/edm-cifar10-32x32-uncond-vp-4d5dcc1f1d0d/
 ```
 
 Verify the image counts and manifest after the command completes:
 
 ```bash
-RESULT=/mnt/ect_project/evaluations/4d5dcc1f1d0d41c8934ad21626eeddbdc0460182becf9fc059a0631b1eedb4da
+RESULT=/mnt/ect_project/evaluations/edm-cifar10-32x32-uncond-vp-4d5dcc1f1d0d
 find "$RESULT/nfe1/images" -type f -name '*.png' | wc -l
 find "$RESULT/nfe2/images" -type f -name '*.png' | wc -l
 (cd "$RESULT" && sha256sum -c sha256_manifest.txt)
@@ -88,10 +115,13 @@ Both image counts must be 64 and every manifest entry must report `OK`.
 ## Metric boundary
 
 This acceptance smoke does not run FID-50k, KID-50k, or any other distribution
-metric. Its purpose is limited to checkpoint loading, fixed-seed generation,
-output completeness, work-group invariance, and repeated-run determinism.
-Historical FID/KID values remain preliminary evidence only. Formal metrics are
-deferred until the B/C checkpoint and comparison protocol are finalized.
+metric. In particular, generating seeds 0-63 does not mean running FID 64
+times. Its purpose is limited to checkpoint loading, fixed-seed generation,
+visualization, output completeness, work-group invariance, and repeated-run
+determinism. Historical seed42 FP32 FID/KID values remain preliminary evidence
+and are not directly comparable with current B/C formal results. Formal
+FID-50k runs only after the final checkpoint and comparison protocol are
+frozen.
 
 ## Git artifact policy
 

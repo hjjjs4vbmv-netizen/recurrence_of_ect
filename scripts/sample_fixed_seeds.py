@@ -5,10 +5,12 @@ import argparse
 import hashlib
 import json
 import pickle
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
 import PIL.Image
@@ -36,6 +38,13 @@ def git_commit():
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
+
+
+def make_checkpoint_id(checkpoint_path, checkpoint_sha256):
+    filename = Path(urlparse(str(checkpoint_path)).path).name
+    stem = Path(filename).stem or "checkpoint"
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-._")
+    return f"{safe_stem or 'checkpoint'}-{checkpoint_sha256[:12]}"
 
 
 def seeded_inputs(seeds, shape, intermediate_steps):
@@ -147,6 +156,61 @@ def configure_precision(net, requested, device):
     return requested
 
 
+def build_metadata(
+    *, args, checkpoint_sha256, checkpoint_id, run_dir, net,
+    effective_precision, seeds, modes, elapsed_seconds,
+):
+    mode_names = [mode["name"] for mode in modes]
+    return {
+        "schema_version": "1.0",
+        "evaluation_git_commit": git_commit(),
+        "checkpoint_path": args.network,
+        "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_id": checkpoint_id,
+        "output_directory": str(run_dir),
+        "seed_count": len(seeds),
+        "seed_list": seeds,
+        "nfe_modes": [mode["nfe"] for mode in modes],
+        "mid_t_by_mode": {
+            mode["name"]: mode["mid_t"] for mode in modes
+        },
+        "precision_requested": args.precision,
+        "precision": effective_precision,
+        "device": str(args.device),
+        "gpu": (
+            torch.cuda.get_device_name(0)
+            if str(args.device).startswith("cuda") and torch.cuda.is_available()
+            else "cpu"
+        ),
+        "elapsed_seconds_total": elapsed_seconds,
+        "elapsed_seconds_by_mode": {
+            mode["name"]: mode["elapsed_seconds"] for mode in modes
+        },
+        "image_count_total": sum(mode["image_count"] for mode in modes),
+        "image_count_by_mode": {
+            mode["name"]: mode["image_count"] for mode in modes
+        },
+        "generator_implementation": "ct_eval.generator_fn",
+        "model_forward_batch_size": 1,
+        "work_group_sizes_verified": [
+            args.work_group_size,
+            args.verify_work_group_size,
+        ],
+        "image_resolution": [net.img_resolution, net.img_resolution],
+        "image_channels": net.img_channels,
+        "determinism_passed": True,
+        "repeat_runs_verified": 2,
+        "verified_modes": mode_names,
+    }
+
+
+def write_manifest(entries, path):
+    path.write_text(
+        "".join(f"{digest}  {name}\n" for digest, name in entries),
+        encoding="utf-8",
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--network", required=True, help="Checkpoint PKL path or URL")
@@ -170,7 +234,8 @@ def main():
     with dnnlib.util.open_url(args.network, verbose=True) as handle:
         checkpoint_bytes = handle.read()
     checkpoint_sha256 = hashlib.sha256(checkpoint_bytes).hexdigest()
-    run_dir = args.outdir / checkpoint_sha256
+    checkpoint_id = make_checkpoint_id(args.network, checkpoint_sha256)
+    run_dir = args.outdir / checkpoint_id
     run_dir.mkdir(parents=True, exist_ok=True)
     data = pickle.loads(checkpoint_bytes)
     net = data["ema"].eval().requires_grad_(False).to(args.device)
@@ -197,45 +262,27 @@ def main():
             modes.append({
                 "name": f"nfe{nfe}",
                 "nfe": nfe,
-                "mid_t": None if nfe == 1 else args.mid_t,
+                "mid_t": [] if nfe == 1 else [args.mid_t],
                 "image_count": len(images),
                 "elapsed_seconds": round(time.perf_counter() - mode_started_at, 6),
             })
     elapsed_seconds = round(time.perf_counter() - started_at, 6)
 
-    metadata = {
-        "checkpoint": args.network,
-        "checkpoint_sha256": checkpoint_sha256,
-        "output_directory": str(run_dir),
-        "evaluation_git_commit": git_commit(),
-        "seeds": seeds,
-        "seed_list": seeds,
-        "seed_count": len(seeds),
-        "image_count": len(seeds) * len(args.nfe),
-        "nfe": args.nfe,
-        "mid_t": args.mid_t,
-        "modes": modes,
-        "elapsed_seconds": elapsed_seconds,
-        "generator_implementation": "ct_eval.generator_fn",
-        "precision_requested": args.precision,
-        "precision": effective_precision,
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
-        "image_format": "32x32 RGB" if net.img_resolution == 32 and net.img_channels == 3 else f"{net.img_resolution}x{net.img_resolution} channels={net.img_channels}",
-        "work_group_sizes_verified": [
-            args.work_group_size,
-            args.verify_work_group_size,
-        ],
-        "forward_batch_size": 1,
-        "work_group_independent_sha256": True,
-        "repeat_runs_verified": 2,
-        "repeat_run_deterministic_sha256": True,
-    }
+    metadata = build_metadata(
+        args=args,
+        checkpoint_sha256=checkpoint_sha256,
+        checkpoint_id=checkpoint_id,
+        run_dir=run_dir,
+        net=net,
+        effective_precision=effective_precision,
+        seeds=seeds,
+        modes=modes,
+        elapsed_seconds=elapsed_seconds,
+    )
     metadata_path = run_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     manifest.append((sha256_file(metadata_path), metadata_path.name))
-    (run_dir / "sha256_manifest.txt").write_text(
-        "".join(f"{digest}  {name}\n" for digest, name in manifest), encoding="utf-8"
-    )
+    write_manifest(manifest, run_dir / "sha256_manifest.txt")
     print(json.dumps(metadata, indent=2))
     print(f"Results written to {run_dir}")
 
