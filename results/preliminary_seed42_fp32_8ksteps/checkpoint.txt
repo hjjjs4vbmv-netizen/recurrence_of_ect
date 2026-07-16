@@ -1,0 +1,1 @@
+ct-runs/00003-cifar10-32x32-uncond-ddpmpp-ect-RAdam-0.000100-gpus1-batch128-fp32-seed42-8ksteps/network-snapshot-latest.pkl

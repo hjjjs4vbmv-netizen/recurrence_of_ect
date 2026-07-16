@@ -78,6 +78,30 @@ Run the following command to calculate FID of a pretrained checkpoint.
 bash eval_ecm.sh <NGPUs> <PORT> --resume <CKPT_PATH> 
 ```
 
+### Fixed-seed evaluation
+
+Role D sampling uses seeds 0-63 and verifies that work-group sizes 8 and 16 produce pixel-identical results for both NFE=1 and NFE=2. It also repeats each configuration to verify deterministic output:
+
+See [`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md) for the complete protocol, metadata requirements, checkpoint-isolated output layout, and metric boundary.
+
+```bash
+bash scripts/sample_checkpoint.sh <CKPT_PATH> \
+  --outdir /mnt/ect_project/evaluations \
+  --seeds 0-63 --nfe 1 2 --mid-t 0.821 \
+  --work-group-size 8 --verify-work-group-size 16 \
+  --precision fp32
+```
+
+The output is isolated under `<outdir>/<checkpoint-stem>-<sha256-prefix>/` and contains one 8x8 grid per NFE, `metadata.json`, `sha256_manifest.txt`, and individual seed images. Keep the individual PNG files under `/mnt`; only commit the grids, metadata, manifest, scripts, and tests.
+
+The unified metric entry point supports explicit one-step or two-step evaluation through `--nfe=1` or `--nfe=2`:
+
+```bash
+bash scripts/evaluate_checkpoint.sh 1 <PORT> <CKPT_PATH> \
+  --outdir ct-evals --data datasets/cifar10-32x32.zip \
+  --nfe=2 --mid_t=0.821 --metrics=fid50k_full
+```
+
 ## Generative Performance
 
 ### FID Evaluation

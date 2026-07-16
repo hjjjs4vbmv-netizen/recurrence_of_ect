@@ -92,6 +92,7 @@ class CommaSeparatedList(click.ParamType):
 
 # Evaluation
 @click.option('--mid_t',         help='Sampler steps [default: 0.821]',                             multiple=True, default=[0.821])
+@click.option('--nfe',           help='Number of function evaluations',                            type=click.Choice(['1', '2']), default='2', show_default=True)
 @click.option('--metrics',       help='Comma-separated list or "none" [default: fid50k_full]',      type=CommaSeparatedList(), default='fid50k_full')
 
 
@@ -145,7 +146,7 @@ def main(**kwargs):
 
     # Trainig options.
     c.update(cudnn_benchmark=opts.bench)
-    c.update(mid_t=opts.mid_t, metrics=opts.metrics)
+    c.update(mid_t=() if opts.nfe == '1' else opts.mid_t, metrics=opts.metrics)
 
     # Random seed.
     if opts.seed is not None:
@@ -274,7 +275,7 @@ def save_image_grid(img, fname, drange, grid_size):
 @torch.no_grad()
 def generator_fn(
     net, latents, class_labels=None, 
-    t_max=80, mid_t=None
+    t_max=80, mid_t=None, step_noises=None
 ):
     # Time step discretization.
     mid_t = [] if mid_t is None else mid_t
@@ -283,12 +284,18 @@ def generator_fn(
     # t_0 = T, t_N = 0
     t_steps = torch.cat([net.round_sigma(t_steps), torch.zeros_like(t_steps[:1])])
 
+    if step_noises is not None and len(step_noises) != max(len(t_steps) - 2, 0):
+        raise ValueError('step_noises must contain one tensor per intermediate sampling step')
+
     # Sampling steps 
     x = latents.to(torch.float64) * t_steps[0]
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):
         x = net(x, t_cur, class_labels).to(torch.float64)
         if t_next > 0:
-            x = x + t_next * torch.randn_like(x) 
+            noise = torch.randn_like(x) if step_noises is None else step_noises[i]
+            if noise.shape != x.shape:
+                raise ValueError(f'step_noises[{i}] has shape {noise.shape}, expected {x.shape}')
+            x = x + t_next * noise.to(device=x.device, dtype=x.dtype)
     return x
 
 #----------------------------------------------------------------------------
