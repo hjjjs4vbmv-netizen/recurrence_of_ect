@@ -1,0 +1,89 @@
+{
+  "schema_version": 2,
+  "test_kind": "engineering_connectivity_only",
+  "official_ect_baseline": false,
+  "branch": "role-a/clean-container-validation",
+  "tested_code_sha": "956c6f41390e9e26885e689eb4c3b66d45957c38",
+  "pr_head_sha_at_validation": "956c6f41390e9e26885e689eb4c3b66d45957c38",
+  "environment_name": "ect-clean-validation",
+  "environment_creation_command": "bash setup_env.sh --name ect-clean-validation",
+  "manual_pip_install": false,
+  "env_yml_huggingface_hub_pin": "huggingface-hub==0.23.4",
+  "gpu": "NVIDIA A100-PCIE-40GB",
+  "python": "3.9.18",
+  "pytorch": "2.3.0",
+  "cuda": "12.1",
+  "dataset_path": "/mnt/ect_project/datasets/cifar10-32x32.zip",
+  "dataset_validation": "passed",
+  "dataset_images": 50000,
+  "dataset_resolution": [
+    32,
+    32
+  ],
+  "dataset_color_mode": "RGB",
+  "checkpoint_path": "/mnt/ect_project/pretrained/edm-cifar10-32x32-uncond-vp.pkl",
+  "checkpoint_sha256": "4d5dcc1f1d0d41c8934ad21626eeddbdc0460182becf9fc059a0631b1eedb4da",
+  "environment_check": "passed",
+  "data_check_only": "passed",
+  "checkpoint_check_only": "passed",
+  "smoke_check_only": "passed",
+  "dry_run": "passed",
+  "port": 29521,
+  "fresh_updates": 100,
+  "resume_updates": 100,
+  "fresh_progress_kimg": 1.0,
+  "resume_progress_kimg": 2.0,
+  "fp16": true,
+  "amp_enabled": true,
+  "metrics": [],
+  "formal_metrics_called": false,
+  "gradscaler_saved": true,
+  "gradscaler_restored": true,
+  "gradscaler_state": {
+    "fresh": {
+      "scale": 8192.0,
+      "growth_tracker": 31
+    },
+    "resume": {
+      "scale": 8192.0,
+      "growth_tracker": 131
+    },
+    "resume_growth_tracker_increment": 100
+  },
+  "loss_finite": true,
+  "loss_sample_counts": {
+    "fresh": 1000,
+    "resume": 1000
+  },
+  "loss_means": {
+    "fresh": [
+      11.838935947418213,
+      17.023772768939686
+    ],
+    "resume": [
+      16.928153270974754
+    ]
+  },
+  "wall_time_seconds": 185,
+  "peak_vram_mib": 5563,
+  "peak_reserved_vram_mib": 5616,
+  "nvidia_smi_peak_used_mib": 2807,
+  "run_directory": "/mnt/ect_project/runs/engineering-smoke/956c6f41-20260716T020346Z",
+  "fresh_snapshot": "fresh-100steps/network-snapshot-000001.pkl",
+  "fresh_training_state": "fresh-100steps/training-state-000001.pt",
+  "resume_snapshot": "resume-100steps/network-snapshot-000001.pkl",
+  "resume_training_state": "resume-100steps/training-state-000001.pt",
+  "all_outputs_persistent": true,
+  "observations": [
+    "Fresh and Resume stats.jsonl contain only finite Loss/loss means.",
+    "Both numbered training states contain gradscaler_state.",
+    "The Resume log explicitly records restoring GradScaler state from the Fresh training state.",
+    "The console loss nan at initialization and resume maintenance is a reporting-order observation; recorded training losses are finite.",
+    "No FID or KID process was invoked; both training option files record metrics=[]."
+  ],
+  "unresolved_issues": [
+    "Non-blocking reporting-order observation: the console can print loss nan before the statistics collector is updated; no training-loop change is included in this PR."
+  ],
+  "evidence_note": "The validation ran on the code SHA above. The subsequent evidence-only commit changes only the three compact evidence files; the final PR head is recorded in PR #8 metadata and its validation summary comment.",
+  "final_status": "passed"
+}
