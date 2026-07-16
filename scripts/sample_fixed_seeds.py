@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate batch-independent fixed-seed samples from an ECT checkpoint."""
+"""Generate work-group-independent fixed-seed samples from a checkpoint."""
 
 import argparse
 import hashlib
@@ -7,6 +7,7 @@ import json
 import pickle
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -48,14 +49,14 @@ def seeded_inputs(seeds, shape, intermediate_steps):
     return torch.stack(latents), [torch.stack(items) for items in noises]
 
 
-def generate_uint8(net, seeds, nfe, mid_t, batch_size, device):
+def generate_uint8(net, seeds, nfe, mid_t, work_group_size, device):
     shape = (net.img_channels, net.img_resolution, net.img_resolution)
     images = []
-    for start in range(0, len(seeds), batch_size):
-        batch_seeds = seeds[start:start + batch_size]
+    for start in range(0, len(seeds), work_group_size):
+        work_group_seeds = seeds[start:start + work_group_size]
         # Keep model forwards at batch=1. cuDNN may select different convolution
         # plans for different batch shapes, which can change quantized pixels.
-        for seed in batch_seeds:
+        for seed in work_group_seeds:
             latents, step_noises = seeded_inputs([seed], shape, nfe - 1)
             image = generator_fn(
                 net,
@@ -72,13 +73,33 @@ def image_bytes(image):
     return image.transpose(1, 2, 0).tobytes()
 
 
-def assert_batch_equivalence(net, seeds, nfe, mid_t, first, second, device):
+def differing_seeds(seeds, first_images, second_images):
+    return [
+        seed
+        for seed, first, second in zip(seeds, first_images, second_images)
+        if image_bytes(first) != image_bytes(second)
+    ]
+
+
+def assert_work_group_equivalence(net, seeds, nfe, mid_t, first, second, device):
     first_images = generate_uint8(net, seeds, nfe, mid_t, first, device)
     second_images = generate_uint8(net, seeds, nfe, mid_t, second, device)
-    mismatches = [seed for seed, a, b in zip(seeds, first_images, second_images) if image_bytes(a) != image_bytes(b)]
+    mismatches = differing_seeds(seeds, first_images, second_images)
     if mismatches:
-        raise RuntimeError(f"NFE={nfe} differs across batch sizes {first}/{second} for seeds: {mismatches}")
+        raise RuntimeError(
+            f"NFE={nfe} differs across work-group sizes {first}/{second} "
+            f"for seeds: {mismatches}"
+        )
     return first_images
+
+
+def assert_repeat_equivalence(net, seeds, nfe, mid_t, work_group_size, reference, device):
+    repeated = generate_uint8(net, seeds, nfe, mid_t, work_group_size, device)
+    mismatches = differing_seeds(seeds, reference, repeated)
+    if mismatches:
+        raise RuntimeError(
+            f"NFE={nfe} differs across repeated runs for seeds: {mismatches}"
+        )
 
 
 def save_rgb(image, path):
@@ -96,6 +117,36 @@ def save_grid(images, path, columns=8):
     PIL.Image.fromarray(grid, mode="RGB").save(path)
 
 
+def save_mode_outputs(images, seeds, mode_dir):
+    if len(images) != len(seeds):
+        raise ValueError("the image and seed counts must match")
+    if len(set(seeds)) != len(seeds):
+        raise ValueError("seeds must not contain duplicates")
+
+    paths = []
+    for seed, image in zip(seeds, images):
+        path = mode_dir / "images" / f"seed{seed:06d}.png"
+        save_rgb(image, path)
+        paths.append(path)
+
+    grid_path = mode_dir / "grid_8x8.png"
+    save_grid(images, grid_path)
+    paths.append(grid_path)
+    return paths
+
+
+def configure_precision(net, requested, device):
+    native = "fp16" if getattr(net, "use_fp16", False) else "fp32"
+    if requested == "checkpoint":
+        return native
+    if not hasattr(net, "use_fp16"):
+        raise ValueError("the checkpoint network does not expose use_fp16")
+    if requested == "fp16" and not str(device).startswith("cuda"):
+        raise ValueError("fp16 sampling requires a CUDA device")
+    net.use_fp16 = requested == "fp16"
+    return requested
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--network", required=True, help="Checkpoint PKL path or URL")
@@ -103,59 +154,90 @@ def main():
     parser.add_argument("--seeds", default="0-63")
     parser.add_argument("--nfe", type=int, choices=[1, 2], nargs="+", default=[1, 2])
     parser.add_argument("--mid-t", type=float, default=0.821)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--verify-batch-size", type=int, default=16)
+    parser.add_argument("--work-group-size", type=int, default=8)
+    parser.add_argument("--verify-work-group-size", type=int, default=16)
+    parser.add_argument(
+        "--precision", choices=["checkpoint", "fp32", "fp16"], default="checkpoint"
+    )
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
 
     seeds = parse_int_list(args.seeds)
     if not seeds:
         raise SystemExit("--seeds must not be empty")
-    args.outdir.mkdir(parents=True, exist_ok=True)
-
+    if len(set(seeds)) != len(seeds):
+        raise SystemExit("--seeds must not contain duplicates")
     with dnnlib.util.open_url(args.network, verbose=True) as handle:
         checkpoint_bytes = handle.read()
     checkpoint_sha256 = hashlib.sha256(checkpoint_bytes).hexdigest()
+    run_dir = args.outdir / checkpoint_sha256
+    run_dir.mkdir(parents=True, exist_ok=True)
     data = pickle.loads(checkpoint_bytes)
     net = data["ema"].eval().requires_grad_(False).to(args.device)
+    effective_precision = configure_precision(net, args.precision, args.device)
 
     manifest = []
+    modes = []
+    started_at = time.perf_counter()
     with torch.no_grad():
         for nfe in args.nfe:
-            images = assert_batch_equivalence(
-                net, seeds, nfe, args.mid_t, args.batch_size,
-                args.verify_batch_size, args.device,
+            mode_started_at = time.perf_counter()
+            images = assert_work_group_equivalence(
+                net, seeds, nfe, args.mid_t, args.work_group_size,
+                args.verify_work_group_size, args.device,
             )
-            mode_dir = args.outdir / f"nfe{nfe}"
-            for seed, image in zip(seeds, images):
-                path = mode_dir / "images" / f"seed{seed:06d}.png"
-                save_rgb(image, path)
-                manifest.append((sha256_file(path), path.relative_to(args.outdir).as_posix()))
-            grid_path = mode_dir / "grid_8x8.png"
-            save_grid(images, grid_path)
-            manifest.append((sha256_file(grid_path), grid_path.relative_to(args.outdir).as_posix()))
+            assert_repeat_equivalence(
+                net, seeds, nfe, args.mid_t, args.work_group_size,
+                images, args.device,
+            )
+            mode_dir = run_dir / f"nfe{nfe}"
+            paths = save_mode_outputs(images, seeds, mode_dir)
+            for path in paths:
+                manifest.append((sha256_file(path), path.relative_to(run_dir).as_posix()))
+            modes.append({
+                "name": f"nfe{nfe}",
+                "nfe": nfe,
+                "mid_t": None if nfe == 1 else args.mid_t,
+                "image_count": len(images),
+                "elapsed_seconds": round(time.perf_counter() - mode_started_at, 6),
+            })
+    elapsed_seconds = round(time.perf_counter() - started_at, 6)
 
     metadata = {
         "checkpoint": args.network,
         "checkpoint_sha256": checkpoint_sha256,
+        "output_directory": str(run_dir),
         "evaluation_git_commit": git_commit(),
         "seeds": seeds,
+        "seed_list": seeds,
+        "seed_count": len(seeds),
+        "image_count": len(seeds) * len(args.nfe),
         "nfe": args.nfe,
         "mid_t": args.mid_t,
-        "precision": "fp16" if getattr(net, "use_fp16", False) else "fp32",
+        "modes": modes,
+        "elapsed_seconds": elapsed_seconds,
+        "generator_implementation": "ct_eval.generator_fn",
+        "precision_requested": args.precision,
+        "precision": effective_precision,
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
         "image_format": "32x32 RGB" if net.img_resolution == 32 and net.img_channels == 3 else f"{net.img_resolution}x{net.img_resolution} channels={net.img_channels}",
-        "batch_sizes_verified": [args.batch_size, args.verify_batch_size],
-        "model_forward_batch_size": 1,
-        "batch_independent_sha256": True,
+        "work_group_sizes_verified": [
+            args.work_group_size,
+            args.verify_work_group_size,
+        ],
+        "forward_batch_size": 1,
+        "work_group_independent_sha256": True,
+        "repeat_runs_verified": 2,
+        "repeat_run_deterministic_sha256": True,
     }
-    metadata_path = args.outdir / "metadata.json"
+    metadata_path = run_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     manifest.append((sha256_file(metadata_path), metadata_path.name))
-    (args.outdir / "sha256_manifest.txt").write_text(
+    (run_dir / "sha256_manifest.txt").write_text(
         "".join(f"{digest}  {name}\n" for digest, name in manifest), encoding="utf-8"
     )
     print(json.dumps(metadata, indent=2))
+    print(f"Results written to {run_dir}")
 
 
 if __name__ == "__main__":

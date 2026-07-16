@@ -80,13 +80,16 @@ bash eval_ecm.sh <NGPUs> <PORT> --resume <CKPT_PATH>
 
 ### Fixed-seed evaluation
 
-Role D sampling uses seeds 0-63 and verifies that batch sizes 8 and 16 produce pixel-identical results for both NFE=1 and NFE=2:
+Role D sampling uses seeds 0-63 and verifies that work-group sizes 8 and 16 produce pixel-identical results for both NFE=1 and NFE=2. It also repeats each configuration to verify deterministic output:
+
+See [`docs/EVALUATION_PROTOCOL.md`](docs/EVALUATION_PROTOCOL.md) for the complete protocol, metadata requirements, checkpoint-isolated output layout, and metric boundary.
 
 ```bash
 bash scripts/sample_checkpoint.sh <CKPT_PATH> \
-  --outdir /mnt/ect_project/evaluations/<RUN_NAME> \
+  --outdir /mnt/ect_project/evaluations \
   --seeds 0-63 --nfe 1 2 --mid-t 0.821 \
-  --batch-size 8 --verify-batch-size 16
+  --work-group-size 8 --verify-work-group-size 16 \
+  --precision fp32
 ```
 
 The output contains one 8x8 grid per NFE, `metadata.json`, `sha256_manifest.txt`, and individual seed images. Keep the individual PNG files under `/mnt`; only commit the grids, metadata, manifest, scripts, and tests.
