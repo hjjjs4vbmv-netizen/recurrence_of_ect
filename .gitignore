@@ -179,3 +179,7 @@ wandb/
 slurm*
 debug.sh
 *.out
+
+checkpoints
+
+checkpoints/*.pkl
