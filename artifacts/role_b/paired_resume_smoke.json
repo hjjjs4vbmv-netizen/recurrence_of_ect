@@ -1,0 +1,16 @@
+{
+  "git_head": "c3537af0e78ae489355b288e2f48d24f22d366fe",
+  "device": "NVIDIA A100-PCIE-40GB",
+  "fresh_mode": "activation",
+  "resume_mode": "stability",
+  "run_dir": "/mnt/ect_project/runs/paired-smoke/sigmoid-activation-c3537af0-20260717T091035Z",
+  "before_nimg": 4096,
+  "after_nimg": 16000,
+  "before_attempted": 32,
+  "after_attempted": 125,
+  "csv_continuous": true,
+  "same_head_all_segments": true,
+  "collector_pass": true,
+  "fresh_exit": 0,
+  "resume_exit": 0
+}
