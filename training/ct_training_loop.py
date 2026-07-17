@@ -1,4 +1,5 @@
 import os
+import csv
 import time
 import copy
 import json
@@ -14,6 +15,23 @@ from torch_utils import training_stats
 from torch_utils import misc
 
 from metrics import metric_main
+
+# Per-attempted-iteration CSV for paired fixed/adaptive comparisons.
+# schedule / stage are recorded every row so collectors do not scrape logs.
+# Adaptive-only columns (loss_ema, correction, ...) are added by Role C later.
+_TRAIN_SUMMARY_FIELDS = (
+    'attempted_iteration',
+    'successful_optimizer_steps',
+    'processed_nimg',
+    'processed_kimg',
+    'loss',
+    'grad_scale',
+    'step_skipped',
+    'schedule',
+    'stage',
+    'elapsed_sec',
+    'peak_vram_gb',
+)
 
 #----------------------------------------------------------------------------
 
@@ -202,11 +220,15 @@ def training_loop(
         misc.copy_params_and_buffers(src_module=data['ema'], dst_module=net, require_all=False)
         misc.copy_params_and_buffers(src_module=data['ema'], dst_module=ema, require_all=False)
         del data # conserve memory
+    attempted_iteration = 0
+    successful_optimizer_steps = 0
     if resume_state_dump:
         dist.print0(f'Loading training state from "{resume_state_dump}"...')
         data = torch.load(resume_state_dump, map_location=torch.device('cpu'))
         misc.copy_params_and_buffers(src_module=data['net'], dst_module=net, require_all=True)
         optimizer.load_state_dict(data['optimizer_state'])
+        attempted_iteration = int(data.get('attempted_iteration', 0))
+        successful_optimizer_steps = int(data.get('successful_optimizer_steps', 0))
         if enable_amp:
             if 'gradscaler_state' in data:
                 # NOTE(aiihn): Although not loading the state_dict of the GradScaler works well,
@@ -248,6 +270,54 @@ def training_loop(
     maintenance_time = tick_start_time - start_time
     dist.update_progress(cur_nimg / 1000, total_kimg)
     stats_jsonl = None
+    train_summary_csv = None
+    train_summary_writer = None
+    schedule_name = getattr(getattr(loss_fn, 'schedule', None), 'name', None)
+    if schedule_name is None:
+        schedule_name = getattr(loss_fn, 'adj', 'unknown')
+
+    if dist.get_rank() == 0:
+        summary_path = os.path.join(run_dir, 'train_summary.csv')
+        summary_exists = os.path.isfile(summary_path) and os.path.getsize(summary_path) > 0
+        if resume_state_dump:
+            if summary_exists:
+                with open(summary_path, 'rt', newline='') as handle:
+                    rows = list(csv.DictReader(handle))
+                if not rows:
+                    raise RuntimeError(f'resume requested but {summary_path} has no data rows')
+                last = rows[-1]
+                last_attempted = int(float(last['attempted_iteration']))
+                last_nimg = int(float(last.get('processed_nimg', last.get('nimg', -1))))
+                if attempted_iteration and last_attempted != attempted_iteration:
+                    raise RuntimeError(
+                        f'train_summary.csv last attempted_iteration={last_attempted} '
+                        f'does not match training-state attempted_iteration={attempted_iteration}'
+                    )
+                if last_nimg >= 0 and last_nimg != cur_nimg:
+                    raise RuntimeError(
+                        f'train_summary.csv last processed_nimg={last_nimg} '
+                        f'does not match resumed cur_nimg={cur_nimg}'
+                    )
+                if not attempted_iteration:
+                    attempted_iteration = last_attempted
+                    successful_optimizer_steps = int(float(
+                        last.get('successful_optimizer_steps', last_attempted)
+                    ))
+            train_summary_csv = open(summary_path, 'at', newline='')
+            train_summary_writer = csv.DictWriter(train_summary_csv, fieldnames=_TRAIN_SUMMARY_FIELDS)
+            if not summary_exists:
+                train_summary_writer.writeheader()
+                train_summary_csv.flush()
+        else:
+            if summary_exists:
+                raise RuntimeError(
+                    f'fresh run refuses to append existing train_summary.csv: {summary_path}; '
+                    f'pass --resume for a legal continuation or use an empty outdir'
+                )
+            train_summary_csv = open(summary_path, 'wt', newline='')
+            train_summary_writer = csv.DictWriter(train_summary_csv, fieldnames=_TRAIN_SUMMARY_FIELDS)
+            train_summary_writer.writeheader()
+            train_summary_csv.flush()
 
     # Prepare for the mapping fn p(r|t).
     dist.print0(f'Reduce dt every {double_ticks} ticks.')
@@ -255,6 +325,19 @@ def training_loop(
     def update_scheduler(loss_fn):
         loss_fn.update_schedule(stage)
         dist.print0(f'Update scheduler at {cur_tick} ticks, {cur_nimg / 1e3} kimg, ratio {loss_fn.ratio}')
+
+    def build_training_state():
+        data = dict(
+            net=net,
+            optimizer_state=optimizer.state_dict(),
+            attempted_iteration=attempted_iteration,
+            successful_optimizer_steps=successful_optimizer_steps,
+        )
+        if hasattr(loss_fn, 'schedule_state_dict'):
+            data['loss_fn_state'] = loss_fn.schedule_state_dict()
+        if enable_amp:
+            data['gradscaler_state'] = scaler.state_dict()
+        return data
         
     stage = cur_tick // double_ticks
     update_scheduler(loss_fn)
@@ -263,6 +346,7 @@ def training_loop(
 
         # Accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
+        loss_batches = []
         for round_idx in range(num_accumulation_rounds):
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
                 images, labels = next(dataset_iterator)
@@ -270,6 +354,7 @@ def training_loop(
                 labels = labels.to(device)
 
                 loss = loss_fn(net=ddp, images=images, labels=labels, augment_pipe=augment_pipe)
+                loss_batches.append(loss.detach())
                 training_stats.report('Loss/loss', loss)
                 if enable_amp:
                     scaler.scale(loss.mean()).backward()
@@ -291,12 +376,34 @@ def training_loop(
         # for g in optimizer.param_groups:
         #     g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
 
-        # Update weights.
+        # Update weights. Record GradScaler scale / skip for train_summary.csv.
+        # scale_before is the scale applied to this step; a drop after update()
+        # means overflow was detected and optimizer.step was skipped.
+        grad_scale = float(loss_scaling)
+        step_skipped = 0
         if enable_amp:
+            scale_before = float(scaler.get_scale())
             scaler.step(optimizer)
             scaler.update()
+            scale_after = float(scaler.get_scale())
+            grad_scale = scale_before
+            step_skipped = int(scale_after < scale_before)
         else:
             optimizer.step()
+
+        attempted_iteration += 1
+        if not step_skipped:
+            successful_optimizer_steps += 1
+
+        loss_mean = float(torch.cat([x.flatten() for x in loss_batches]).mean().cpu())
+        elapsed_sec = time.time() - start_time
+        peak_vram_gb = torch.cuda.max_memory_allocated(device) / 2**30
+        training_stats.report0('Progress/grad_scale', grad_scale)
+        training_stats.report0('Progress/step_skipped', step_skipped)
+        training_stats.report0('Progress/attempted_iteration', attempted_iteration)
+        training_stats.report0('Progress/successful_optimizer_steps', successful_optimizer_steps)
+        training_stats.report0('Timing/elapsed_sec', elapsed_sec)
+        training_stats.report0('Resources/update_peak_gpu_mem_gb', peak_vram_gb)
 
         # Update EMA.
         if ema_halflife_kimg is not None:
@@ -309,6 +416,22 @@ def training_loop(
 
         # Perform maintenance tasks once per tick.
         cur_nimg += batch_size
+        if train_summary_writer is not None:
+            train_summary_writer.writerow({
+                'attempted_iteration': attempted_iteration,
+                'successful_optimizer_steps': successful_optimizer_steps,
+                'processed_nimg': cur_nimg,
+                'processed_kimg': f'{cur_nimg / 1e3:.6f}',
+                'loss': f'{loss_mean:.8f}',
+                'grad_scale': f'{grad_scale:.8g}',
+                'step_skipped': step_skipped,
+                'schedule': schedule_name,
+                'stage': stage,
+                'elapsed_sec': f'{elapsed_sec:.6f}',
+                'peak_vram_gb': f'{peak_vram_gb:.6f}',
+            })
+            train_summary_csv.flush()
+
         done = (cur_nimg >= total_kimg * 1000)
         if (not done) and (cur_tick != 0) and (cur_nimg < tick_start_nimg + kimg_per_tick * 1000):
             continue
@@ -319,6 +442,8 @@ def training_loop(
         fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
         fields += [f"kimg {training_stats.report0('Progress/kimg', cur_nimg / 1e3):<9.1f}"]
         fields += [f"loss {training_stats.default_collector['Loss/loss']:<9.5f}"]
+        fields += [f"grad_scale {grad_scale:<9g}"]
+        fields += [f"step_skipped {step_skipped:<7d}"]
         fields += [f"time {dnnlib.util.format_time(training_stats.report0('Timing/total_sec', tick_end_time - start_time)):<12s}"]
         fields += [f"sec/tick {training_stats.report0('Timing/sec_per_tick', tick_end_time - tick_start_time):<7.1f}"]
         fields += [f"sec/kimg {training_stats.report0('Timing/sec_per_kimg', (tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg) * 1e3):<7.2f}"]
@@ -351,10 +476,7 @@ def training_loop(
 
         # Save full dump of the training state.
         if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
-            data = dict(net=net, optimizer_state=optimizer.state_dict())
-            if enable_amp:
-                data.update(gradscaler_state=scaler.state_dict())
-            torch.save(data, os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'))
+            torch.save(build_training_state(), os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'))
 
         # Save latest checkpoints
         if (ckpt_ticks is not None) and (done or cur_tick % ckpt_ticks == 0) and cur_tick != 0:
@@ -372,10 +494,7 @@ def training_loop(
             del data # conserve memory
 
             if dist.get_rank() == 0:
-                data = dict(net=net, optimizer_state=optimizer.state_dict())
-                if enable_amp:
-                    data.update(gradscaler_state=scaler.state_dict())
-                torch.save(data, os.path.join(run_dir, f'training-state-latest.pt'))
+                torch.save(build_training_state(), os.path.join(run_dir, f'training-state-latest.pt'))
 
         # Sample Img
         if (sample_ticks is not None) and (done or cur_tick % sample_ticks == 0) and dist.get_rank() == 0:
@@ -444,6 +563,8 @@ def training_loop(
                 metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl='network-snapshot-latest.pkl')
 
     # Done.
+    if train_summary_csv is not None:
+        train_summary_csv.close()
     dist.print0()
     dist.print0('Exiting...')
 
