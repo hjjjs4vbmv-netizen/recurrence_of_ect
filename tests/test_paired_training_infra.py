@@ -136,6 +136,7 @@ class RunnerInfraTests(unittest.TestCase):
         env = os.environ.copy()
         env["ECT_DATA_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.zip"
         env["ECT_TRANSFER_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.pkl"
+        env["ECT_RUNS_ROOT"] = "/tmp/paired-runs"
         completed = subprocess.run(
             ["bash", str(RUNNER), "--schedule", "sigmoid", "--mode", "dry-run"],
             cwd=REPO_ROOT,
@@ -148,8 +149,70 @@ class RunnerInfraTests(unittest.TestCase):
         self.assertIn("--transfer=", completed.stdout)
         self.assertNotIn("--resume=", completed.stdout)
         self.assertIn("--mapping=sigmoid", completed.stdout)
+        self.assertRegex(
+            completed.stdout,
+            r"OUTDIR=.*/sigmoid-dry-run-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
+        )
 
-    def test_dry_run_resume_excludes_transfer(self):
+    def test_dry_run_adaptive_outdir_slug(self):
+        env = os.environ.copy()
+        env["ECT_DATA_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.zip"
+        env["ECT_TRANSFER_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.pkl"
+        env["ECT_RUNS_ROOT"] = "/tmp/paired-runs"
+        completed = subprocess.run(
+            ["bash", str(RUNNER), "--schedule", "adaptive_v1", "--mode", "dry-run"],
+            cwd=REPO_ROOT,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("schedule_slug=adaptive-v1", completed.stdout)
+        self.assertRegex(
+            completed.stdout,
+            r"OUTDIR=.*/adaptive-v1-dry-run-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
+        )
+
+    def test_runner_has_no_tee_append(self):
+        text = RUNNER.read_text(encoding="utf-8")
+        # Only count real pipeline usage, not commentary.
+        self.assertNotRegex(text, r'(?m)^[^#\n]*\btee -a\b')
+        self.assertRegex(text, r'(?m)^[^#\n]*\btee "\$\{LOG_PATH\}"')
+
+    def test_fresh_nonempty_outdir_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp) / "busy"
+            outdir.mkdir()
+            (outdir / "marker").write_text("x", encoding="utf-8")
+            data = Path(tmp) / "data.zip"
+            transfer = Path(tmp) / "transfer.pkl"
+            write_dummy_asset(data)
+            write_dummy_asset(transfer)
+            env = os.environ.copy()
+            env["ECT_DATA_PATH"] = str(data)
+            env["ECT_TRANSFER_PATH"] = str(transfer)
+            completed = subprocess.run(
+                [
+                    "bash",
+                    str(RUNNER),
+                    "--schedule",
+                    "sigmoid",
+                    "--mode",
+                    "stability",
+                    "--outdir",
+                    str(outdir),
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertTrue(
+                ("exists and is not empty" in completed.stderr)
+                or ("fresh run requires empty outdir" in completed.stderr),
+                completed.stderr,
+            )
         with tempfile.TemporaryDirectory() as tmp:
             resume = Path(tmp) / "training-state-latest.pt"
             resume.write_bytes(b"x")

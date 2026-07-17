@@ -39,29 +39,46 @@ Except for `--schedule` / `--mapping`, both arms use:
 
 ## Modes
 
-| Mode | Duration (Mimg) | Intent |
-| --- | --- | --- |
-| `dry-run` | n/a | Print resolved params + exact command |
-| `activation` | 0.004 | 32 attempted iterations @ batch 128 (ends at 4.096 kimg after batch rounding); Role C adaptive activation check |
-| `stability` | 0.016 | ~125 attempted iterations @ batch 128 |
-| `baseline` | 0.128 | ~1000 attempted iterations @ batch 128 |
+| Mode | Duration (Mimg) | Attempted iterations @ batch 128 | Intent |
+| --- | --- | --- | --- |
+| `dry-run` | n/a | n/a | Print resolved params + exact command |
+| `activation` | 0.004 | 32 (ends at 4.096 kimg after batch rounding; protocol text “~31” is the pre-rounding estimate) | Verify adaptive controller activates before stability |
+| `stability` | 0.016 | 125 | Engineering stability evidence |
+| `baseline` | 0.128 | 1000 | Formal paired baseline budget |
 
 ## Runner
 
 ```bash
 bash scripts/run_schedule_experiment.sh \
-  --schedule sigmoid \
-  --mode stability
+  --mode stability \
+  --schedule sigmoid
+
+bash scripts/run_schedule_experiment.sh \
+  --mode stability \
+  --schedule adaptive_v1
+```
+
+Except for `--schedule` (and Role C adaptive-internal knobs once on `main`), every other frozen knob is identical.
+
+Default unique outdirs:
+
+```text
+$ECT_RUNS_ROOT/
+├── sigmoid-activation-<sha>-<timestamp>/
+├── adaptive-v1-activation-<sha>-<timestamp>/
+├── sigmoid-stability-<sha>-<timestamp>/
+└── adaptive-v1-stability-<sha>-<timestamp>/
 ```
 
 Rules:
 
-1. Fixed and adaptive share this runner.
+1. Fixed and adaptive share this single runner (`scripts/run_schedule_experiment.sh`).
 2. Fresh runs always target a unique empty directory and pass `--transfer` only.
-3. Fresh run fails immediately if the target directory is non-empty.
-4. Resume requires explicit `--resume path/to/training-state-*.pt` and must not pass `--transfer`.
-5. Progress (`cur_nimg`, `cur_tick`, counters) is restored from training-state contents, not from the filename tick.
-6. Only `--schedule` differs between B/C arms; everything else stays fixed.
+3. Outdir exists and is non-empty → fail immediately (no checkpoint overwrite).
+4. Logs use `tee` without `-a` into a fresh `${mode}-${timestamp}.log`.
+5. Resume requires explicit `--resume` and must not pass `--transfer`.
+6. Resume refuses mixed schedules (meta / dirname arm mismatch).
+7. Progress (`cur_nimg`, next-loop `cur_tick`, counters, `elapsed_sec`) is restored from training-state contents.
 
 ## Telemetry
 

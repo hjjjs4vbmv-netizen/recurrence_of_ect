@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 
-# Paired fixed/adaptive schedule runner (Role B).
-# Same frozen hyperparameters for both schedules; only --schedule and --mode differ.
+# Paired experiment runner (Role B) — owner of fixed/adaptive comparison infra.
+# Same frozen hyperparameters for both schedules; only --schedule (and Role C
+# adaptive-internal knobs once available) may differ.
 #
-# Duration (Mimg) → total_kimg = int(duration * 1000); updates ≈ total_kimg*1000/batch
+# Duration (Mimg) → total_kimg = int(duration * 1000); discrete batch completion
 #   activation 0.004 → 4 kimg target → 32 attempted iterations @ batch 128 (4096 images)
-#   stability  0.016 → 16 kimg  → ~125 attempted iterations @ batch 128
-#   baseline   0.128 → 128 kimg → ~1000 attempted iterations @ batch 128
+#   stability  0.016 → 16 kimg       → 125 attempted iterations @ batch 128
+#   baseline   0.128 → 128 kimg      → 1000 attempted iterations @ batch 128
 #
 # Fresh runs always use a unique empty directory and pass --transfer only.
 # Resume requires --resume, reuses that run directory, and must NOT pass --transfer.
+# Fixed and adaptive never share an output directory.
 
 set -euo pipefail
 
@@ -32,20 +34,22 @@ Usage:
 
   dry-run     Print resolved params and exact command; exit without training.
   activation  Train with --duration=0.004 (32 attempted iterations @ batch 128).
-  stability   Train with --duration=0.016 (~125 attempted iterations @ batch 128).
-  baseline    Train with --duration=0.128 (~1000 attempted iterations @ batch 128).
+  stability   Train with --duration=0.016 (125 attempted iterations @ batch 128).
+  baseline    Train with --duration=0.128 (1000 attempted iterations @ batch 128).
 
 Fresh runs:
   - Pass --transfer only (never --resume)
-  - If --outdir is omitted, a unique directory is created under
-    $ECT_RUNS_ROOT/<schedule>/<mode>/<timestamp>-<pid>
+  - Default outdir:
+      $ECT_RUNS_ROOT/<schedule>-<mode>-<gitsha>-<timestamp>/
+      e.g. sigmoid-stability-ad05dc47-20260717T084500Z/
   - If --outdir is set, it must be empty (or not exist); otherwise the run fails.
+  - Never appends to old logs; never reuses a non-empty directory.
 
 Resume:
   - Pass --resume only (never --transfer)
   - Requires --resume pointing at training-state-*.pt
   - Uses the parent directory of that file as the run directory
-    ( --outdir is optional and must match if provided ).
+  - Refuses if run_meta schedule disagrees with --schedule (no mixed arms)
 EOF
 }
 
@@ -78,6 +82,31 @@ sha256_file() {
         sha256sum "$path" | awk '{print $1}'
     else
         printf 'missing'
+    fi
+}
+
+schedule_slug() {
+    case "$1" in
+        adaptive_v1) printf 'adaptive-v1' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+short_git_sha() {
+    (
+        cd "${ROOT_DIR}"
+        git rev-parse --short=8 HEAD 2>/dev/null || printf 'unknown'
+    )
+}
+
+read_meta_value() {
+    local file="$1"
+    local key="$2"
+    [[ -f "$file" ]] || return 0
+    local line
+    line="$(grep -E "^${key}=" "$file" | tail -n 1 || true)"
+    if [[ -n "$line" ]]; then
+        printf '%s' "${line#*=}"
     fi
 }
 
@@ -180,7 +209,7 @@ case "$MODE" in
         ;;
 esac
 
-# Fixed paths and hyperparameters — shared by all schedules/modes to avoid drift.
+# Frozen paired knobs — identical for sigmoid and adaptive_v1.
 DATA="${ECT_DATA_PATH:-/mnt/ect_project/datasets/cifar10-32x32.zip}"
 TRANSFER="${ECT_TRANSFER_PATH:-/mnt/ect_project/pretrained/edm-cifar10-32x32-uncond-vp.pkl}"
 RUNS_ROOT="${ECT_RUNS_ROOT:-/mnt/ect_project/runs/paired-training-v1}"
@@ -207,6 +236,10 @@ METRICS=none
 
 cd "${ROOT_DIR}"
 
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+GIT_SHA_SHORT="$(short_git_sha)"
+SCHEDULE_SLUG="$(schedule_slug "${SCHEDULE}")"
+
 resolve_outdir() {
     if [[ -n "${RESUME}" ]]; then
         [[ -f "${RESUME}" ]] || fail "resume state not found: ${RESUME}"
@@ -221,8 +254,8 @@ resolve_outdir() {
         OUTDIR="${OUTDIR_OVERRIDE}"
         return
     fi
-    STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-    OUTDIR="${RUNS_ROOT}/${SCHEDULE}/${MODE}/${STAMP}-$$"
+    # Unique per (schedule, mode, commit, time): never mixes sigmoid with adaptive_v1.
+    OUTDIR="${RUNS_ROOT}/${SCHEDULE_SLUG}-${MODE}-${GIT_SHA_SHORT}-${RUN_STAMP}"
 }
 
 build_cmd() {
@@ -267,6 +300,7 @@ print_resolved_params() {
     cat <<EOF
 mode=${MODE}
 schedule=${SCHEDULE}
+schedule_slug=${SCHEDULE_SLUG}
 DATA=${DATA}
 TRANSFER=${TRANSFER}
 OUTDIR=${OUTDIR}
@@ -304,6 +338,31 @@ print_exact_command() {
     printf '\n'
 }
 
+assert_fresh_outdir_safe() {
+    if [[ -d "${OUTDIR}" ]] && ! dir_is_empty "${OUTDIR}"; then
+        fail "outdir exists and is not empty (refuse overwrite): ${OUTDIR}"
+    fi
+    mkdir -p "${OUTDIR}"
+    dir_is_empty "${OUTDIR}" || fail "fresh run requires empty outdir: ${OUTDIR}"
+}
+
+assert_resume_schedule_isolated() {
+    local meta_schedule
+    meta_schedule="$(read_meta_value "${OUTDIR}/run_meta.env" schedule)"
+    if [[ -n "${meta_schedule}" && "${meta_schedule}" != "${SCHEDULE}" ]]; then
+        fail "refuse mixed-schedule resume: outdir schedule=${meta_schedule} vs --schedule=${SCHEDULE}"
+    fi
+    # Directory name should also encode the arm when created by this runner.
+    local base
+    base="$(basename "${OUTDIR}")"
+    if [[ "${base}" == sigmoid-* && "${SCHEDULE}" != "sigmoid" ]]; then
+        fail "refuse writing adaptive into sigmoid outdir: ${OUTDIR}"
+    fi
+    if [[ "${base}" == adaptive-v1-* && "${SCHEDULE}" != "adaptive_v1" ]]; then
+        fail "refuse writing sigmoid into adaptive-v1 outdir: ${OUTDIR}"
+    fi
+}
+
 resolve_outdir
 build_cmd
 
@@ -316,8 +375,7 @@ fi
 [[ -f "${DATA}" ]] || fail "dataset not found: ${DATA}"
 if [[ -z "${RESUME}" ]]; then
     [[ -f "${TRANSFER}" ]] || fail "transfer checkpoint not found: ${TRANSFER}"
-    mkdir -p "${OUTDIR}"
-    dir_is_empty "${OUTDIR}" || fail "fresh run requires empty outdir: ${OUTDIR}"
+    assert_fresh_outdir_safe
 else
     for arg in "${CMD[@]}"; do
         case "${arg}" in
@@ -326,6 +384,7 @@ else
         esac
     done
     [[ "${HAS_RESUME_FLAG:-0}" == "1" ]] || fail "internal error: resume command missing --resume"
+    assert_resume_schedule_isolated
 fi
 
 # Preserve the first (fresh) run_meta.env forever. Resume writes mode-specific + latest
@@ -343,8 +402,10 @@ fi
 # Always show the segment meta on stdout.
 cat "${META_LATEST}"
 
-LOG_PATH="${OUTDIR}/${MODE}.log"
+# Never append to old logs: each invocation gets a fresh log file; refuse clobber.
+LOG_PATH="${OUTDIR}/${MODE}-${RUN_STAMP}.log"
+[[ ! -e "${LOG_PATH}" ]] || fail "log already exists (refuse overwrite/append): ${LOG_PATH}"
 printf '[run_schedule_experiment] logging to %s\n' "${LOG_PATH}"
 
-run_in_env "${CMD[@]}" 2>&1 | tee -a "${LOG_PATH}"
+run_in_env "${CMD[@]}" 2>&1 | tee "${LOG_PATH}"
 exit "${PIPESTATUS[0]}"
