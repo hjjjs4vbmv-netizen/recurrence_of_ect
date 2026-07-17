@@ -346,12 +346,50 @@ assert_fresh_outdir_safe() {
     dir_is_empty "${OUTDIR}" || fail "fresh run requires empty outdir: ${OUTDIR}"
 }
 
-assert_resume_schedule_isolated() {
-    local meta_schedule
-    meta_schedule="$(read_meta_value "${OUTDIR}/run_meta.env" schedule)"
-    if [[ -n "${meta_schedule}" && "${meta_schedule}" != "${SCHEDULE}" ]]; then
+assert_resume_identity_gate() {
+    local meta_path="${OUTDIR}/run_meta.env"
+    [[ -f "${meta_path}" ]] || fail "resume requires immutable run_meta.env: ${meta_path}"
+
+    local meta_schedule meta_head meta_dirty meta_data_sha meta_transfer_sha
+    meta_schedule="$(read_meta_value "${meta_path}" schedule)"
+    meta_head="$(read_meta_value "${meta_path}" git_head)"
+    meta_dirty="$(read_meta_value "${meta_path}" git_dirty)"
+    meta_data_sha="$(read_meta_value "${meta_path}" data_sha256)"
+    meta_transfer_sha="$(read_meta_value "${meta_path}" transfer_sha256)"
+
+    [[ -n "${meta_schedule}" ]] || fail "run_meta.env missing schedule"
+    [[ -n "${meta_head}" && "${meta_head}" != "unknown" ]] || fail "run_meta.env missing git_head"
+    [[ -n "${meta_data_sha}" && "${meta_data_sha}" != "missing" ]] || fail "run_meta.env missing data_sha256"
+    [[ -n "${meta_transfer_sha}" && "${meta_transfer_sha}" != "missing" ]] || fail "run_meta.env missing transfer_sha256"
+
+    if [[ "${meta_schedule}" != "${SCHEDULE}" ]]; then
         fail "refuse mixed-schedule resume: outdir schedule=${meta_schedule} vs --schedule=${SCHEDULE}"
     fi
+
+    local cur_head cur_dirty cur_data_sha cur_transfer_sha
+    cur_head="$(
+        cd "${ROOT_DIR}"
+        git rev-parse HEAD 2>/dev/null || echo unknown
+    )"
+    if [[ -n "$(cd "${ROOT_DIR}" && git status --porcelain 2>/dev/null)" ]]; then
+        cur_dirty=true
+    else
+        cur_dirty=false
+    fi
+    cur_data_sha="$(sha256_file "${DATA}")"
+    cur_transfer_sha="$(sha256_file "${TRANSFER}")"
+
+    [[ "${cur_head}" == "${meta_head}" ]] || fail \
+        "resume HEAD mismatch: current=${cur_head} fresh=${meta_head}"
+    [[ "${meta_dirty}" == "false" ]] || fail \
+        "refuse resume from dirty fresh segment: git_dirty=${meta_dirty}"
+    [[ "${cur_dirty}" == "false" ]] || fail \
+        "refuse resume with dirty worktree (must match clean fresh segment)"
+    [[ "${cur_data_sha}" == "${meta_data_sha}" ]] || fail \
+        "resume dataset SHA mismatch: current=${cur_data_sha} fresh=${meta_data_sha}"
+    [[ "${cur_transfer_sha}" == "${meta_transfer_sha}" ]] || fail \
+        "resume transfer SHA mismatch: current=${cur_transfer_sha} fresh=${meta_transfer_sha}"
+
     # Directory name should also encode the arm when created by this runner.
     local base
     base="$(basename "${OUTDIR}")"
@@ -366,6 +404,20 @@ assert_resume_schedule_isolated() {
 resolve_outdir
 build_cmd
 
+# Resume identity gate runs for dry-run too so provenance can be tested without CUDA.
+if [[ -n "${RESUME}" ]]; then
+    [[ -f "${DATA}" ]] || fail "dataset not found: ${DATA}"
+    [[ -f "${TRANSFER}" ]] || fail "transfer checkpoint not found: ${TRANSFER}"
+    for arg in "${CMD[@]}"; do
+        case "${arg}" in
+            --transfer=*) fail "internal error: resume command includes --transfer" ;;
+            --resume=*) HAS_RESUME_FLAG=1 ;;
+        esac
+    done
+    [[ "${HAS_RESUME_FLAG:-0}" == "1" ]] || fail "internal error: resume command missing --resume"
+    assert_resume_identity_gate
+fi
+
 if [[ "${MODE}" == "dry-run" ]]; then
     print_resolved_params
     print_exact_command
@@ -376,15 +428,6 @@ fi
 if [[ -z "${RESUME}" ]]; then
     [[ -f "${TRANSFER}" ]] || fail "transfer checkpoint not found: ${TRANSFER}"
     assert_fresh_outdir_safe
-else
-    for arg in "${CMD[@]}"; do
-        case "${arg}" in
-            --transfer=*) fail "internal error: resume command includes --transfer" ;;
-            --resume=*) HAS_RESUME_FLAG=1 ;;
-        esac
-    done
-    [[ "${HAS_RESUME_FLAG:-0}" == "1" ]] || fail "internal error: resume command missing --resume"
-    assert_resume_schedule_isolated
 fi
 
 # Preserve the first (fresh) run_meta.env forever. Resume writes mode-specific + latest

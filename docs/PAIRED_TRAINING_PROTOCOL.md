@@ -77,7 +77,8 @@ Rules:
 3. Outdir exists and is non-empty → fail immediately (no checkpoint overwrite).
 4. Logs use `tee` without `-a` into a fresh `${mode}-${timestamp}.log`.
 5. Resume requires explicit `--resume` and must not pass `--transfer`.
-6. Resume refuses mixed schedules (meta / dirname arm mismatch).
+6. Resume refuses mixed schedules (meta / dirname arm mismatch) **and** requires the
+   same clean `git_head` / dataset / transfer SHA as the immutable fresh `run_meta.env`.
 7. Progress (`cur_nimg`, next-loop `cur_tick`, counters, `elapsed_sec`) is restored from training-state contents.
 
 ## Telemetry

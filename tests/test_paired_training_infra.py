@@ -216,11 +216,43 @@ class RunnerInfraTests(unittest.TestCase):
 
     def test_dry_run_resume_excludes_transfer(self):
         with tempfile.TemporaryDirectory() as tmp:
-            resume = Path(tmp) / "training-state-latest.pt"
+            tmp_path = Path(tmp)
+            outdir = tmp_path / "sigmoid-activation-deadbeef-20260101T000000Z"
+            outdir.mkdir()
+            resume = outdir / "training-state-latest.pt"
             resume.write_bytes(b"x")
+            data = tmp_path / "data.zip"
+            transfer = tmp_path / "transfer.pkl"
+            write_dummy_asset(data, b"dataset")
+            write_dummy_asset(transfer, b"transfer")
+            import hashlib
+
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+            ).strip()
+            dirty = bool(
+                subprocess.check_output(
+                    ["git", "status", "--porcelain"], cwd=REPO_ROOT, text=True
+                ).strip()
+            )
+            if dirty:
+                self.skipTest("worktree dirty; resume identity gate requires clean tree")
+            (outdir / "run_meta.env").write_text(
+                "\n".join(
+                    [
+                        "schedule=sigmoid",
+                        f"git_head={head}",
+                        "git_dirty=false",
+                        f"data_sha256={hashlib.sha256(b'dataset').hexdigest()}",
+                        f"transfer_sha256={hashlib.sha256(b'transfer').hexdigest()}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             env = os.environ.copy()
-            env["ECT_DATA_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.zip"
-            env["ECT_TRANSFER_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.pkl"
+            env["ECT_DATA_PATH"] = str(data)
+            env["ECT_TRANSFER_PATH"] = str(transfer)
             completed = subprocess.run(
                 [
                     "bash",
@@ -240,6 +272,112 @@ class RunnerInfraTests(unittest.TestCase):
             )
             self.assertIn("--resume=", completed.stdout)
             self.assertNotIn("--transfer=", completed.stdout)
+
+    def test_resume_head_mismatch_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            outdir = tmp_path / "sigmoid-activation-deadbeef-20260101T000000Z"
+            outdir.mkdir()
+            resume = outdir / "training-state-latest.pt"
+            resume.write_bytes(b"x")
+            data = tmp_path / "data.zip"
+            transfer = tmp_path / "transfer.pkl"
+            write_dummy_asset(data, b"dataset")
+            write_dummy_asset(transfer, b"transfer")
+            import hashlib
+
+            (outdir / "run_meta.env").write_text(
+                "\n".join(
+                    [
+                        "schedule=sigmoid",
+                        "git_head=" + ("a" * 40),
+                        "git_dirty=false",
+                        f"data_sha256={hashlib.sha256(b'dataset').hexdigest()}",
+                        f"transfer_sha256={hashlib.sha256(b'transfer').hexdigest()}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["ECT_DATA_PATH"] = str(data)
+            env["ECT_TRANSFER_PATH"] = str(transfer)
+            completed = subprocess.run(
+                [
+                    "bash",
+                    str(RUNNER),
+                    "--schedule",
+                    "sigmoid",
+                    "--mode",
+                    "dry-run",
+                    "--resume",
+                    str(resume),
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("resume HEAD mismatch", completed.stderr)
+
+    def test_resume_hash_mismatch_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            outdir = tmp_path / "sigmoid-activation-deadbeef-20260101T000000Z"
+            outdir.mkdir()
+            resume = outdir / "training-state-latest.pt"
+            resume.write_bytes(b"x")
+            data = tmp_path / "data.zip"
+            transfer = tmp_path / "transfer.pkl"
+            write_dummy_asset(data, b"dataset")
+            write_dummy_asset(transfer, b"transfer")
+            import hashlib
+
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+            ).strip()
+            dirty = bool(
+                subprocess.check_output(
+                    ["git", "status", "--porcelain"], cwd=REPO_ROOT, text=True
+                ).strip()
+            )
+            if dirty:
+                self.skipTest("worktree dirty; resume identity gate requires clean tree")
+            (outdir / "run_meta.env").write_text(
+                "\n".join(
+                    [
+                        "schedule=sigmoid",
+                        f"git_head={head}",
+                        "git_dirty=false",
+                        "data_sha256=" + ("0" * 64),
+                        f"transfer_sha256={hashlib.sha256(b'transfer').hexdigest()}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["ECT_DATA_PATH"] = str(data)
+            env["ECT_TRANSFER_PATH"] = str(transfer)
+            completed = subprocess.run(
+                [
+                    "bash",
+                    str(RUNNER),
+                    "--schedule",
+                    "sigmoid",
+                    "--mode",
+                    "dry-run",
+                    "--resume",
+                    str(resume),
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("resume dataset SHA mismatch", completed.stderr)
 
 
 class CollectorInfraTests(unittest.TestCase):
@@ -261,7 +399,16 @@ class CollectorInfraTests(unittest.TestCase):
                 ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
             ).strip()
             (run_dir / "run_meta.env").write_text(
-                f"git_head={head}\ngit_dirty=false\nexact_command=python ct_train.py --mapping=sigmoid --duration=0.016\n",
+                "\n".join(
+                    [
+                        f"git_head={head}",
+                        "git_dirty=false",
+                        f"data_sha256={__import__('hashlib').sha256(b'dataset').hexdigest()}",
+                        f"transfer_sha256={__import__('hashlib').sha256(b'transfer').hexdigest()}",
+                        "exact_command=python ct_train.py --mapping=sigmoid --duration=0.016",
+                    ]
+                )
+                + "\n",
                 encoding="utf-8",
             )
             completed = subprocess.run(
@@ -478,6 +625,70 @@ class CollectorInfraTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_collector_command_head_mismatch_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(run_dir, data_path=data, transfer_path=transfer)
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+            ).strip()
+            import hashlib
+
+            data_sha = hashlib.sha256(data.read_bytes()).hexdigest()
+            transfer_sha = hashlib.sha256(transfer.read_bytes()).hexdigest()
+            (run_dir / "run_meta.stability.env").write_text(
+                "\n".join(
+                    [
+                        "mode=stability",
+                        "schedule=sigmoid",
+                        "git_head=" + ("b" * 40),
+                        "git_dirty=false",
+                        f"data_sha256={data_sha}",
+                        f"transfer_sha256={transfer_sha}",
+                        "exact_command=python ct_train.py --mapping=sigmoid --duration=0.016",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            # Keep immutable fresh identity at current HEAD.
+            lines = []
+            for line in (run_dir / "run_meta.env").read_text(encoding="utf-8").splitlines():
+                if line.startswith("git_head="):
+                    lines.append(f"git_head={head}")
+                else:
+                    lines.append(line)
+            (run_dir / "run_meta.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLLECTOR),
+                    "--run-dir",
+                    str(run_dir),
+                    "--outdir",
+                    str(outdir),
+                    "--data",
+                    str(data),
+                    "--transfer",
+                    str(transfer),
+                    "--mode",
+                    "stability",
+                    "--schedule",
+                    "sigmoid",
+                    "--allow-dirty",
+                    "--skip-snapshot-load",
+                    "--skip-training-state-load",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("resume/command git_head", completed.stderr)
 
     def test_activation_expected_kimg_uses_batch_rounding(self):
         from scripts.collect_schedule_results import expected_final_nimg

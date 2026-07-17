@@ -352,6 +352,39 @@ def main(argv: list[str] | None = None) -> None:
     if train_git_dirty and not args.allow_dirty:
         fail("run_meta.env records git_dirty=true; refuse formal packaging without --allow-dirty")
 
+    # Dual provenance: every resume segment meta must agree with the immutable fresh identity.
+    cmd_git_head = command_meta.get("git_head")
+    if not cmd_git_head or cmd_git_head == "unknown":
+        fail("command meta missing git_head")
+    if cmd_git_head != train_git_head:
+        fail(
+            f"resume/command git_head={cmd_git_head} != fresh git_head={train_git_head}"
+        )
+    cmd_git_dirty = parse_boolish(command_meta.get("git_dirty", "true"))
+    if cmd_git_dirty and not args.allow_dirty:
+        fail("command meta records git_dirty=true; refuse formal packaging without --allow-dirty")
+    cmd_data_sha = command_meta.get("data_sha256")
+    cmd_transfer_sha = command_meta.get("transfer_sha256")
+    fresh_data_sha = run_meta.get("data_sha256")
+    fresh_transfer_sha = run_meta.get("transfer_sha256")
+    if not fresh_data_sha or fresh_data_sha in {"missing", "unknown"}:
+        fail("run_meta.env missing training-time data_sha256")
+    if not fresh_transfer_sha or fresh_transfer_sha in {"missing", "unknown"}:
+        fail("run_meta.env missing training-time transfer_sha256")
+    if not cmd_data_sha or cmd_data_sha in {"missing", "unknown"}:
+        fail("command meta missing data_sha256")
+    if not cmd_transfer_sha or cmd_transfer_sha in {"missing", "unknown"}:
+        fail("command meta missing transfer_sha256")
+    if cmd_data_sha != fresh_data_sha:
+        fail(
+            f"command data_sha256={cmd_data_sha} != fresh data_sha256={fresh_data_sha}"
+        )
+    if cmd_transfer_sha != fresh_transfer_sha:
+        fail(
+            f"command transfer_sha256={cmd_transfer_sha} != fresh "
+            f"transfer_sha256={fresh_transfer_sha}"
+        )
+
     source_csv = run_dir / "train_summary.csv"
     rows = load_rows(source_csv)
 
@@ -485,10 +518,6 @@ def main(argv: list[str] | None = None) -> None:
         fail(f"transfer SHA256 unavailable: {args.transfer}")
     train_data_sha = run_meta.get("data_sha256")
     train_transfer_sha = run_meta.get("transfer_sha256")
-    if not train_data_sha or train_data_sha in {"missing", "unknown"}:
-        fail("run_meta.env missing training-time data_sha256")
-    if not train_transfer_sha or train_transfer_sha in {"missing", "unknown"}:
-        fail("run_meta.env missing training-time transfer_sha256")
     if dataset_sha != train_data_sha:
         fail(
             f"dataset SHA mismatch: packaging={dataset_sha} "
