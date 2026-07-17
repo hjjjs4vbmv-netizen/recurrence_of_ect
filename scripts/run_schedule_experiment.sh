@@ -4,11 +4,12 @@
 # Same frozen hyperparameters for both schedules; only --schedule and --mode differ.
 #
 # Duration (Mimg) → total_kimg = int(duration * 1000); updates ≈ total_kimg*1000/batch
-#   stability 0.016 → 16 kimg  → ~125 attempted iterations @ batch 128
-#   baseline  0.128 → 128 kimg → ~1000 attempted iterations @ batch 128
+#   activation 0.004 → 4 kimg   → ~31 attempted iterations @ batch 128
+#   stability  0.016 → 16 kimg  → ~125 attempted iterations @ batch 128
+#   baseline   0.128 → 128 kimg → ~1000 attempted iterations @ batch 128
 #
-# Fresh runs always use a unique empty directory. Resume requires --resume and
-# reuses that run directory (no silent append into a wrong experiment).
+# Fresh runs always use a unique empty directory and pass --transfer only.
+# Resume requires --resume, reuses that run directory, and must NOT pass --transfer.
 
 set -euo pipefail
 
@@ -25,20 +26,23 @@ usage() {
 Usage:
   bash scripts/run_schedule_experiment.sh \
     --schedule {sigmoid|adaptive_v1} \
-    --mode {dry-run|stability|baseline} \
+    --mode {dry-run|activation|stability|baseline} \
     [--outdir DIR] \
     [--resume PATH_TO_training-state.pt]
 
   dry-run     Print resolved params and exact command; exit without training.
+  activation  Train with --duration=0.004 (~31 attempted iterations @ batch 128).
   stability   Train with --duration=0.016 (~125 attempted iterations @ batch 128).
   baseline    Train with --duration=0.128 (~1000 attempted iterations @ batch 128).
 
 Fresh runs:
+  - Pass --transfer only (never --resume)
   - If --outdir is omitted, a unique directory is created under
     $ECT_RUNS_ROOT/<schedule>/<mode>/<timestamp>-<pid>
   - If --outdir is set, it must be empty (or not exist); otherwise the run fails.
 
 Resume:
+  - Pass --resume only (never --transfer)
   - Requires --resume pointing at training-state-*.pt
   - Uses the parent directory of that file as the run directory
     ( --outdir is optional and must match if provided ).
@@ -97,6 +101,28 @@ collect_git_meta() {
     )
 }
 
+collect_runtime_meta() {
+    run_in_env python - <<'PY'
+import platform
+import sys
+
+print(f"python_version={sys.version.split()[0]}")
+print(f"platform={platform.platform()}")
+try:
+    import torch
+    print(f"torch_version={torch.__version__}")
+    print(f"cuda_version={getattr(torch.version, 'cuda', None)}")
+    if torch.cuda.is_available():
+        print(f"gpu_name={torch.cuda.get_device_name(0)}")
+        print(f"gpu_count={torch.cuda.device_count()}")
+    else:
+        print("gpu_name=")
+        print("gpu_count=0")
+except Exception as exc:  # noqa: BLE001
+    print(f"torch_import_error={exc}")
+PY
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --schedule)
@@ -139,6 +165,9 @@ case "$MODE" in
     dry-run)
         DURATION=""
         ;;
+    activation)
+        DURATION="0.004"
+        ;;
     stability)
         DURATION="0.016"
         ;;
@@ -146,7 +175,7 @@ case "$MODE" in
         DURATION="0.128"
         ;;
     *)
-        echo "Usage: $0 --mode {dry-run|stability|baseline}" >&2
+        echo "Usage: $0 --mode {dry-run|activation|stability|baseline}" >&2
         exit 2
         ;;
 esac
@@ -197,10 +226,10 @@ resolve_outdir() {
 }
 
 build_cmd() {
+    # ct_train.py forbids --transfer and --resume together.
     CMD=(
         python "${ROOT_DIR}/ct_train.py"
         "--data=${DATA}"
-        "--transfer=${TRANSFER}"
         "--outdir=${OUTDIR}"
         "--nosubdir"
         "--cond=${COND}"
@@ -226,6 +255,8 @@ build_cmd() {
     )
     if [[ -n "${RESUME}" ]]; then
         CMD+=("--resume=${RESUME}")
+    else
+        CMD+=("--transfer=${TRANSFER}")
     fi
     if [[ -n "${DURATION}" ]]; then
         CMD+=("--duration=${DURATION}")
@@ -283,15 +314,23 @@ if [[ "${MODE}" == "dry-run" ]]; then
 fi
 
 [[ -f "${DATA}" ]] || fail "dataset not found: ${DATA}"
-[[ -f "${TRANSFER}" ]] || fail "transfer checkpoint not found: ${TRANSFER}"
-
 if [[ -z "${RESUME}" ]]; then
+    [[ -f "${TRANSFER}" ]] || fail "transfer checkpoint not found: ${TRANSFER}"
     mkdir -p "${OUTDIR}"
     dir_is_empty "${OUTDIR}" || fail "fresh run requires empty outdir: ${OUTDIR}"
+else
+    for arg in "${CMD[@]}"; do
+        case "${arg}" in
+            --transfer=*) fail "internal error: resume command includes --transfer" ;;
+            --resume=*) HAS_RESUME_FLAG=1 ;;
+        esac
+    done
+    [[ "${HAS_RESUME_FLAG:-0}" == "1" ]] || fail "internal error: resume command missing --resume"
 fi
 
 print_resolved_params | tee "${OUTDIR}/run_meta.env"
 print_exact_command | tee -a "${OUTDIR}/run_meta.env"
+collect_runtime_meta | tee -a "${OUTDIR}/run_meta.env"
 
 LOG_PATH="${OUTDIR}/${MODE}.log"
 printf '[run_schedule_experiment] logging to %s\n' "${LOG_PATH}"

@@ -42,6 +42,7 @@ Except for `--schedule` / `--mapping`, both arms use:
 | Mode | Duration (Mimg) | Intent |
 | --- | --- | --- |
 | `dry-run` | n/a | Print resolved params + exact command |
+| `activation` | 0.004 | ~31 attempted iterations; Role C adaptive activation check |
 | `stability` | 0.016 | ~125 attempted iterations @ batch 128 |
 | `baseline` | 0.128 | ~1000 attempted iterations @ batch 128 |
 
@@ -56,11 +57,11 @@ bash scripts/run_schedule_experiment.sh \
 Rules:
 
 1. Fixed and adaptive share this runner.
-2. Fresh runs always target a unique empty directory (auto path under
-   `$ECT_RUNS_ROOT`, or an empty `--outdir`).
+2. Fresh runs always target a unique empty directory and pass `--transfer` only.
 3. Fresh run fails immediately if the target directory is non-empty.
-4. Resume requires explicit `--resume path/to/training-state-*.pt`.
-5. Only `--schedule` differs between B/C arms; everything else stays fixed.
+4. Resume requires explicit `--resume path/to/training-state-*.pt` and must not pass `--transfer`.
+5. Progress (`cur_nimg`, `cur_tick`, counters) is restored from training-state contents, not from the filename tick.
+6. Only `--schedule` differs between B/C arms; everything else stays fixed.
 
 ## Telemetry
 
@@ -87,7 +88,7 @@ Adaptive-only fields (`loss_ema`, `correction`, …) are reserved for Role C.
 ## Collector
 
 ```bash
-python scripts/collect_fixed_baseline_results.py \
+python scripts/collect_schedule_results.py \
   --run-dir /path/to/run \
   --outdir results/fixed_baseline_v1 \
   --mode stability \
@@ -96,8 +97,12 @@ python scripts/collect_fixed_baseline_results.py \
   --transfer "$ECT_TRANSFER_PATH"
 ```
 
-Automatically records HEAD SHA, branch, dirty status, exact command, asset
-SHA256 digests, and torch/CUDA/GPU metadata. Manual `--git-commit` is not
+`scripts/collect_fixed_baseline_results.py` remains a compatibility wrapper.
+
+Automatically records train-time HEAD from `run_meta.env`, packaging-time HEAD,
+dirty status, exact command, asset SHA256 digests, and runtime metadata.
+Packaging fails closed unless train-time and packaging HEADs match, and unless
+`--data` / `--transfer` hashes are present. Manual `--git-commit` is not
 accepted. Dirty trees fail closed unless `--allow-dirty` is passed for
 preliminary packaging.
 

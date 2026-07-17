@@ -190,7 +190,15 @@ def main(**kwargs):
         if not match or not os.path.isfile(opts.resume):
             raise click.ClickException('--resume must point to training-state-*.pt from a previous training run')
         c.resume_pkl = os.path.join(os.path.dirname(opts.resume), f'network-snapshot-{match.group(1)}.pkl')
-        c.resume_tick = int(match.group(1)) if opts.resume_tick is None else opts.resume_tick
+        # Prefer explicit --resume-tick; otherwise parse numeric tick from the filename.
+        # training-state-latest.pt cannot be converted with int(); the training loop
+        # restores the authoritative cur_tick / cur_nimg from the serialized state.
+        if opts.resume_tick is not None:
+            c.resume_tick = opts.resume_tick
+        elif match.group(1) == 'latest':
+            c.resume_tick = 0
+        else:
+            c.resume_tick = int(match.group(1))
         c.resume_state_dump = opts.resume
 
     # Description string.

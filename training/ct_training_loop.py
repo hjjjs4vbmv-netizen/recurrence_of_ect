@@ -222,6 +222,9 @@ def training_loop(
         del data # conserve memory
     attempted_iteration = 0
     successful_optimizer_steps = 0
+    resumed_cur_nimg = None
+    resumed_cur_tick = None
+    resumed_tick_start_nimg = None
     if resume_state_dump:
         dist.print0(f'Loading training state from "{resume_state_dump}"...')
         data = torch.load(resume_state_dump, map_location=torch.device('cpu'))
@@ -229,6 +232,14 @@ def training_loop(
         optimizer.load_state_dict(data['optimizer_state'])
         attempted_iteration = int(data.get('attempted_iteration', 0))
         successful_optimizer_steps = int(data.get('successful_optimizer_steps', 0))
+        if 'cur_nimg' in data:
+            resumed_cur_nimg = int(data['cur_nimg'])
+        if 'cur_tick' in data:
+            resumed_cur_tick = int(data['cur_tick'])
+        if 'tick_start_nimg' in data:
+            resumed_tick_start_nimg = int(data['tick_start_nimg'])
+        if hasattr(loss_fn, 'load_schedule_state_dict') and 'loss_fn_state' in data:
+            loss_fn.load_schedule_state_dict(data['loss_fn_state'])
         if enable_amp:
             if 'gradscaler_state' in data:
                 # NOTE(aiihn): Although not loading the state_dict of the GradScaler works well,
@@ -263,9 +274,19 @@ def training_loop(
     # Train.
     dist.print0(f'Training for {total_kimg} kimg...')
     dist.print0()
-    cur_nimg = resume_tick * kimg_per_tick * 1000
-    cur_tick = resume_tick
-    tick_start_nimg = cur_nimg
+    # Prefer exact progress from training-state; filename-derived resume_tick is only a fallback.
+    if resumed_cur_nimg is not None:
+        cur_nimg = resumed_cur_nimg
+    else:
+        cur_nimg = resume_tick * kimg_per_tick * 1000
+    if resumed_cur_tick is not None:
+        cur_tick = resumed_cur_tick
+    else:
+        cur_tick = resume_tick
+    if resumed_tick_start_nimg is not None:
+        tick_start_nimg = resumed_tick_start_nimg
+    else:
+        tick_start_nimg = cur_nimg
     tick_start_time = time.time()
     maintenance_time = tick_start_time - start_time
     dist.update_progress(cur_nimg / 1000, total_kimg)
@@ -274,7 +295,9 @@ def training_loop(
     train_summary_writer = None
     schedule_name = getattr(getattr(loss_fn, 'schedule', None), 'name', None)
     if schedule_name is None:
-        schedule_name = getattr(loss_fn, 'adj', 'unknown')
+        schedule_name = getattr(loss_fn, 'adj', None)
+    if schedule_name is None:
+        schedule_name = loss_kwargs.get('adj', 'unknown')
 
     if dist.get_rank() == 0:
         summary_path = os.path.join(run_dir, 'train_summary.csv')
@@ -332,6 +355,9 @@ def training_loop(
             optimizer_state=optimizer.state_dict(),
             attempted_iteration=attempted_iteration,
             successful_optimizer_steps=successful_optimizer_steps,
+            cur_nimg=cur_nimg,
+            cur_tick=cur_tick,
+            tick_start_nimg=tick_start_nimg,
         )
         if hasattr(loss_fn, 'schedule_state_dict'):
             data['loss_fn_state'] = loss_fn.schedule_state_dict()
