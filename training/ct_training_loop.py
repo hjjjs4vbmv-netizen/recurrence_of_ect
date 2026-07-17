@@ -225,19 +225,25 @@ def training_loop(
     resumed_cur_nimg = None
     resumed_cur_tick = None
     resumed_tick_start_nimg = None
+    elapsed_base_sec = 0.0
     if resume_state_dump:
         dist.print0(f'Loading training state from "{resume_state_dump}"...')
         data = torch.load(resume_state_dump, map_location=torch.device('cpu'))
         misc.copy_params_and_buffers(src_module=data['net'], dst_module=net, require_all=True)
         optimizer.load_state_dict(data['optimizer_state'])
+        if 'cur_nimg' not in data:
+            raise RuntimeError(
+                f'resume training-state missing cur_nimg: {resume_state_dump}; '
+                f'refuse filename-derived progress fallback for paired runs'
+            )
         attempted_iteration = int(data.get('attempted_iteration', 0))
         successful_optimizer_steps = int(data.get('successful_optimizer_steps', 0))
-        if 'cur_nimg' in data:
-            resumed_cur_nimg = int(data['cur_nimg'])
+        resumed_cur_nimg = int(data['cur_nimg'])
         if 'cur_tick' in data:
             resumed_cur_tick = int(data['cur_tick'])
         if 'tick_start_nimg' in data:
             resumed_tick_start_nimg = int(data['tick_start_nimg'])
+        elapsed_base_sec = float(data.get('elapsed_sec', 0.0))
         if hasattr(loss_fn, 'load_schedule_state_dict') and 'loss_fn_state' in data:
             loss_fn.load_schedule_state_dict(data['loss_fn_state'])
         if enable_amp:
@@ -368,6 +374,7 @@ def training_loop(
             cur_nimg=cur_nimg,
             cur_tick=cur_tick + 1,
             tick_start_nimg=cur_nimg,
+            elapsed_sec=elapsed_base_sec + (time.time() - start_time),
         )
         if hasattr(loss_fn, 'schedule_state_dict'):
             data['loss_fn_state'] = loss_fn.schedule_state_dict()
@@ -377,6 +384,16 @@ def training_loop(
         
     stage = cur_tick // double_ticks
     update_scheduler(loss_fn)
+
+    # Already at/past the requested budget (e.g. resume with same duration): do not
+    # execute an extra optimizer step before noticing done.
+    if cur_nimg >= total_kimg * 1000:
+        dist.print0(f'Already reached training budget at {cur_nimg / 1e3:.3f} kimg; exiting.')
+        if train_summary_csv is not None:
+            train_summary_csv.close()
+        dist.print0()
+        dist.print0('Exiting...')
+        return
 
     while True:
 
@@ -432,7 +449,7 @@ def training_loop(
             successful_optimizer_steps += 1
 
         loss_mean = float(torch.cat([x.flatten() for x in loss_batches]).mean().cpu())
-        elapsed_sec = time.time() - start_time
+        elapsed_sec = elapsed_base_sec + (time.time() - start_time)
         peak_vram_gb = torch.cuda.max_memory_allocated(device) / 2**30
         training_stats.report0('Progress/grad_scale', grad_scale)
         training_stats.report0('Progress/step_skipped', step_skipped)

@@ -96,6 +96,29 @@ def parse_run_meta(path: Path) -> dict[str, str]:
     return meta
 
 
+def load_identity_and_command_meta(run_dir: Path, mode: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Split immutable train identity from the packaging-mode command meta.
+
+    run_meta.env is written once on the fresh segment and must not be overwritten.
+    Resume segments write run_meta.<mode>.env / run_meta.latest.env.
+    """
+    identity_path = run_dir / "run_meta.env"
+    identity = parse_run_meta(identity_path)
+    command_candidates = [
+        run_dir / f"run_meta.{mode}.env",
+        run_dir / "run_meta.latest.env",
+        identity_path,
+    ]
+    command_meta = None
+    for path in command_candidates:
+        if path.is_file():
+            command_meta = parse_run_meta(path)
+            break
+    if command_meta is None:
+        fail(f"no run_meta sidecar found under {run_dir}")
+    return identity, command_meta
+
+
 def sha256_file(path: Path | None) -> str | None:
     if path is None or not path.is_file():
         return None
@@ -316,7 +339,7 @@ def main(argv: list[str] | None = None) -> None:
     if packaging_git["packaging_git_dirty"] and not args.allow_dirty:
         fail("git worktree is dirty; commit/stash first or pass --allow-dirty for preliminary packaging")
 
-    run_meta = parse_run_meta(run_dir / "run_meta.env")
+    run_meta, command_meta = load_identity_and_command_meta(run_dir, args.mode)
     train_git_head = run_meta.get("git_head")
     if not train_git_head or train_git_head == "unknown":
         fail("run_meta.env missing git_head from training time")
@@ -339,7 +362,7 @@ def main(argv: list[str] | None = None) -> None:
     if csv_schedule != args.schedule:
         fail(f"CSV schedule={csv_schedule!r} != --schedule={args.schedule!r}")
 
-    exact_command = extract_exact_command(run_meta, args.log, args.exact_command_file)
+    exact_command = extract_exact_command(command_meta, args.log, args.exact_command_file)
     cmd_schedule = extract_mapping_from_command(exact_command)
     if cmd_schedule is None:
         fail("exact_command missing --mapping=/--schedule=")
@@ -441,7 +464,7 @@ def main(argv: list[str] | None = None) -> None:
         gradscaler_state = state["gradscaler_state"]
         if gradscaler_state is None or gradscaler_state == {}:
             fail(f"gradscaler_state empty in {training_state}")
-        for key in ("cur_nimg", "cur_tick", "attempted_iteration", "successful_optimizer_steps"):
+        for key in ("cur_nimg", "cur_tick", "attempted_iteration", "successful_optimizer_steps", "elapsed_sec"):
             if key not in state:
                 fail(f"{key} missing in {training_state}")
         print(f"[collect_schedule_results] loaded training-state: {training_state}")
@@ -477,7 +500,7 @@ def main(argv: list[str] | None = None) -> None:
             f"train-time={train_transfer_sha}"
         )
 
-    runtime = collect_runtime_metadata(run_meta)
+    runtime = collect_runtime_metadata(command_meta)
     evidence_class = (
         "preliminary"
         if packaging_git["packaging_git_dirty"] or train_git_dirty or args.allow_dirty

@@ -330,22 +330,120 @@ class CollectorInfraTests(unittest.TestCase):
         cur_tick = 1
         cur_nimg = 16000
         tick_start_nimg = 12800  # previous tick start; must NOT be what we persist
+        elapsed_base_sec = 31.3
+        segment_elapsed = 10.0
         state = {
             "cur_nimg": cur_nimg,
             "cur_tick": cur_tick + 1,
             "tick_start_nimg": cur_nimg,
             "attempted_iteration": 125,
             "successful_optimizer_steps": 116,
+            "elapsed_sec": elapsed_base_sec + segment_elapsed,
         }
         self.assertEqual(int(state["cur_nimg"]), 16000)
         self.assertEqual(int(state["cur_tick"]), 2)
         self.assertEqual(int(state["tick_start_nimg"]), 16000)
         self.assertNotEqual(int(state["tick_start_nimg"]), tick_start_nimg)
+        self.assertGreater(float(state["elapsed_sec"]), elapsed_base_sec)
         # Filename-derived estimate would be wrong for short runs.
         resume_tick_from_name = 1
         kimg_per_tick = 50
         wrong = resume_tick_from_name * kimg_per_tick * 1000
         self.assertNotEqual(wrong, int(state["cur_nimg"]))
+
+    def test_already_done_budget_is_noop(self):
+        cur_nimg = 16000
+        total_kimg = 16
+        self.assertGreaterEqual(cur_nimg, total_kimg * 1000)
+
+    def test_collector_prefers_mode_meta_for_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                mode="activation",
+                duration=0.004,
+                data_path=data,
+                transfer_path=transfer,
+            )
+            # Simulate resume overwriting only mode/latest sidecars, preserving run_meta.env
+            # with activation identity hashes, while stability command lives in mode file.
+            import hashlib
+            import shutil
+
+            identity = run_dir / "run_meta.env"
+            shutil.copy(identity, run_dir / "run_meta.activation.env")
+            data_sha = hashlib.sha256(data.read_bytes()).hexdigest()
+            transfer_sha = hashlib.sha256(transfer.read_bytes()).hexdigest()
+            head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
+            # Rewrite CSV to stability budget so packaging as stability can succeed.
+            write_minimal_run(
+                run_dir,
+                mode="stability",
+                duration=0.016,
+                data_path=data,
+                transfer_path=transfer,
+            )
+            # Restore immutable identity with original hashes/git, but keep stability command sidecar.
+            (run_dir / "run_meta.env").write_text(
+                "\n".join(
+                    [
+                        "mode=activation",
+                        "schedule=sigmoid",
+                        f"git_head={head}",
+                        "git_branch=role-b/paired-training-v1",
+                        "git_dirty=false",
+                        f"data_sha256={data_sha}",
+                        f"transfer_sha256={transfer_sha}",
+                        "exact_command=python ct_train.py --mapping=sigmoid --duration=0.004",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "run_meta.stability.env").write_text(
+                "\n".join(
+                    [
+                        "mode=stability",
+                        "schedule=sigmoid",
+                        f"git_head={head}",
+                        "git_dirty=false",
+                        f"data_sha256={data_sha}",
+                        f"transfer_sha256={transfer_sha}",
+                        "exact_command=python ct_train.py --mapping=sigmoid --duration=0.016",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLLECTOR),
+                    "--run-dir",
+                    str(run_dir),
+                    "--outdir",
+                    str(outdir),
+                    "--data",
+                    str(data),
+                    "--transfer",
+                    str(transfer),
+                    "--mode",
+                    "stability",
+                    "--schedule",
+                    "sigmoid",
+                    "--allow-dirty",
+                    "--skip-snapshot-load",
+                    "--skip-training-state-load",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_activation_expected_kimg_uses_batch_rounding(self):
         from scripts.collect_schedule_results import expected_final_nimg

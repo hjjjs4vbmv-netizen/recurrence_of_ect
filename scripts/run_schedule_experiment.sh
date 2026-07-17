@@ -328,9 +328,20 @@ else
     [[ "${HAS_RESUME_FLAG:-0}" == "1" ]] || fail "internal error: resume command missing --resume"
 fi
 
-print_resolved_params | tee "${OUTDIR}/run_meta.env"
-print_exact_command | tee -a "${OUTDIR}/run_meta.env"
-collect_runtime_meta | tee -a "${OUTDIR}/run_meta.env"
+# Preserve the first (fresh) run_meta.env forever. Resume writes mode-specific + latest
+# sidecars so packaging can still recover train-time hashes and the final command.
+META_LATEST="${OUTDIR}/run_meta.latest.env"
+META_MODE="${OUTDIR}/run_meta.${MODE}.env"
+{
+    print_resolved_params
+    print_exact_command
+    collect_runtime_meta
+} | tee "${META_LATEST}" | tee "${META_MODE}" >/dev/null
+if [[ ! -f "${OUTDIR}/run_meta.env" ]]; then
+    cp "${META_LATEST}" "${OUTDIR}/run_meta.env"
+fi
+# Always show the segment meta on stdout.
+cat "${META_LATEST}"
 
 LOG_PATH="${OUTDIR}/${MODE}.log"
 printf '[run_schedule_experiment] logging to %s\n' "${LOG_PATH}"
