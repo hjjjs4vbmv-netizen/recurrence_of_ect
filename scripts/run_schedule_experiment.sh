@@ -4,7 +4,7 @@
 # Same frozen hyperparameters for both schedules; only --schedule and --mode differ.
 #
 # Duration (Mimg) → total_kimg = int(duration * 1000); updates ≈ total_kimg*1000/batch
-#   activation 0.004 → 4 kimg   → ~31 attempted iterations @ batch 128
+#   activation 0.004 → 4 kimg target → 32 attempted iterations @ batch 128 (4096 images)
 #   stability  0.016 → 16 kimg  → ~125 attempted iterations @ batch 128
 #   baseline   0.128 → 128 kimg → ~1000 attempted iterations @ batch 128
 #
@@ -31,7 +31,7 @@ Usage:
     [--resume PATH_TO_training-state.pt]
 
   dry-run     Print resolved params and exact command; exit without training.
-  activation  Train with --duration=0.004 (~31 attempted iterations @ batch 128).
+  activation  Train with --duration=0.004 (32 attempted iterations @ batch 128).
   stability   Train with --duration=0.016 (~125 attempted iterations @ batch 128).
   baseline    Train with --duration=0.128 (~1000 attempted iterations @ batch 128).
 

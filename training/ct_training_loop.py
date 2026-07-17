@@ -311,6 +311,12 @@ def training_loop(
                 last = rows[-1]
                 last_attempted = int(float(last['attempted_iteration']))
                 last_nimg = int(float(last.get('processed_nimg', last.get('nimg', -1))))
+                last_schedule = str(last.get('schedule', '')).strip()
+                if last_schedule and last_schedule != str(schedule_name):
+                    raise RuntimeError(
+                        f'train_summary.csv schedule={last_schedule!r} does not match '
+                        f'current schedule={schedule_name!r}; refuse mixed-schedule resume'
+                    )
                 if attempted_iteration and last_attempted != attempted_iteration:
                     raise RuntimeError(
                         f'train_summary.csv last attempted_iteration={last_attempted} '
@@ -350,14 +356,18 @@ def training_loop(
         dist.print0(f'Update scheduler at {cur_tick} ticks, {cur_nimg / 1e3} kimg, ratio {loss_fn.ratio}')
 
     def build_training_state():
+        # Checkpointing happens during maintenance, before the loop advances:
+        #   cur_tick += 1
+        #   tick_start_nimg = cur_nimg
+        # Persist the *next-loop* values so resume matches uninterrupted training.
         data = dict(
             net=net,
             optimizer_state=optimizer.state_dict(),
             attempted_iteration=attempted_iteration,
             successful_optimizer_steps=successful_optimizer_steps,
             cur_nimg=cur_nimg,
-            cur_tick=cur_tick,
-            tick_start_nimg=tick_start_nimg,
+            cur_tick=cur_tick + 1,
+            tick_start_nimg=cur_nimg,
         )
         if hasattr(loss_fn, 'schedule_state_dict'):
             data['loss_fn_state'] = loss_fn.schedule_state_dict()

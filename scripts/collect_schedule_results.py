@@ -42,6 +42,19 @@ MODE_DURATION_MIMG = {
 }
 
 
+def expected_final_nimg(duration_mimg: float, global_batch: int) -> int:
+    """Match ct_train/ct_training_loop discrete batch completion.
+
+    total_kimg = max(int(duration_mimg * 1000), 1)
+    training stops once cur_nimg >= total_kimg * 1000 after a full batch.
+    """
+    if global_batch <= 0:
+        fail(f"global_batch must be positive, got {global_batch}")
+    target_kimg = max(int(duration_mimg * 1000), 1)
+    target_nimg = target_kimg * 1000
+    return math.ceil(target_nimg / global_batch) * global_batch
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"[collect_schedule_results] ERROR: {message}")
 
@@ -269,6 +282,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Permit packaging when the packaging worktree is dirty (not for formal evidence)",
     )
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow writing into a non-empty --outdir (default: fail closed)",
+    )
+    parser.add_argument(
         "--skip-snapshot-load",
         action="store_true",
         help="Skip pickle.load of network snapshot (tests only)",
@@ -389,9 +407,14 @@ def main(argv: list[str] | None = None) -> None:
         fail(f"non-finite losses: nan_count={nan_count} inf_count={inf_count}")
 
     final_kimg = packaged[-1]["processed_kimg"]
-    expected_kimg = args.duration_mimg * 1000.0
+    expected_nimg = expected_final_nimg(args.duration_mimg, args.global_batch)
+    expected_kimg = expected_nimg / 1000.0
     if not math.isclose(final_kimg, expected_kimg, rel_tol=0.0, abs_tol=1e-6):
-        fail(f"final processed_kimg={final_kimg} != expected {expected_kimg} for mode={args.mode}")
+        fail(
+            f"final processed_kimg={final_kimg} != expected {expected_kimg} "
+            f"(duration_mimg={args.duration_mimg}, batch={args.global_batch}, "
+            f"expected_nimg={expected_nimg}) for mode={args.mode}"
+        )
 
     if args.log is not None and args.log.is_file():
         hits = [
@@ -437,6 +460,22 @@ def main(argv: list[str] | None = None) -> None:
         fail(f"dataset SHA256 unavailable: {args.data}")
     if not transfer_sha:
         fail(f"transfer SHA256 unavailable: {args.transfer}")
+    train_data_sha = run_meta.get("data_sha256")
+    train_transfer_sha = run_meta.get("transfer_sha256")
+    if not train_data_sha or train_data_sha in {"missing", "unknown"}:
+        fail("run_meta.env missing training-time data_sha256")
+    if not train_transfer_sha or train_transfer_sha in {"missing", "unknown"}:
+        fail("run_meta.env missing training-time transfer_sha256")
+    if dataset_sha != train_data_sha:
+        fail(
+            f"dataset SHA mismatch: packaging={dataset_sha} "
+            f"train-time={train_data_sha}"
+        )
+    if transfer_sha != train_transfer_sha:
+        fail(
+            f"transfer SHA mismatch: packaging={transfer_sha} "
+            f"train-time={train_transfer_sha}"
+        )
 
     runtime = collect_runtime_metadata(run_meta)
     evidence_class = (
@@ -485,6 +524,8 @@ def main(argv: list[str] | None = None) -> None:
     }
 
     outdir = args.outdir
+    if outdir.exists() and any(outdir.iterdir()) and not args.overwrite:
+        fail(f"outdir is not empty: {outdir}; pass --overwrite to replace packaged evidence")
     outdir.mkdir(parents=True, exist_ok=True)
     summary_path = outdir / "train_summary.csv"
     with summary_path.open("w", newline="", encoding="utf-8") as handle:

@@ -28,11 +28,30 @@ def write_minimal_run(
     schedule: str = "sigmoid",
     mode: str = "stability",
     duration: float = 0.016,
-    kimg: float = 16.0,
+    kimg: float | None = None,
+    global_batch: int = 128,
     include_nan: bool = False,
     git_head: str | None = None,
+    data_path: Path | None = None,
+    transfer_path: Path | None = None,
 ) -> None:
+    import hashlib
+    import math
+
     run_dir.mkdir(parents=True, exist_ok=True)
+    if kimg is None:
+        target_kimg = max(int(duration * 1000), 1)
+        target_nimg = target_kimg * 1000
+        final_nimg = math.ceil(target_nimg / global_batch) * global_batch
+        kimg = final_nimg / 1000.0
+
+    def _sha(path: Path | None, fallback: bytes) -> str:
+        payload = path.read_bytes() if path is not None and path.is_file() else fallback
+        return hashlib.sha256(payload).hexdigest()
+
+    data_sha = _sha(data_path, b"dataset")
+    transfer_sha = _sha(transfer_path, b"transfer")
+
     head = git_head or subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
     ).strip()
@@ -54,6 +73,8 @@ def write_minimal_run(
                 f"git_head={head}",
                 f"git_branch={branch}",
                 f"git_dirty={'true' if dirty else 'false'}",
+                f"data_sha256={data_sha}",
+                f"transfer_sha256={transfer_sha}",
                 f"exact_command={exact}",
                 "python_version=3.10.0",
                 "torch_version=2.0.0",
@@ -66,7 +87,7 @@ def write_minimal_run(
         encoding="utf-8",
     )
 
-    nimg = int(kimg * 1000)
+    nimg = int(round(kimg * 1000))
     loss = "nan" if include_nan else "1.25"
     with (run_dir / "train_summary.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
@@ -242,7 +263,7 @@ class CollectorInfraTests(unittest.TestCase):
             run_dir = tmp_path / "run"
             outdir = tmp_path / "out"
             data, transfer = self._assets(tmp_path)
-            write_minimal_run(run_dir, include_nan=True)
+            write_minimal_run(run_dir, include_nan=True, data_path=data, transfer_path=transfer)
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -276,7 +297,7 @@ class CollectorInfraTests(unittest.TestCase):
             run_dir = tmp_path / "run"
             outdir = tmp_path / "out"
             data, transfer = self._assets(tmp_path)
-            write_minimal_run(run_dir, schedule="sigmoid")
+            write_minimal_run(run_dir, schedule="sigmoid", data_path=data, transfer_path=transfer)
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -305,23 +326,111 @@ class CollectorInfraTests(unittest.TestCase):
             self.assertIn("CSV schedule", completed.stderr)
 
     def test_resume_progress_fields_round_trip_dict(self):
-        # Pure unit check of the state schema Role B now persists.
+        # Maintenance saves next-loop values so resume matches uninterrupted training.
+        cur_tick = 1
+        cur_nimg = 16000
+        tick_start_nimg = 12800  # previous tick start; must NOT be what we persist
         state = {
-            "cur_nimg": 16000,
-            "cur_tick": 1,
-            "tick_start_nimg": 16000,
+            "cur_nimg": cur_nimg,
+            "cur_tick": cur_tick + 1,
+            "tick_start_nimg": cur_nimg,
             "attempted_iteration": 125,
             "successful_optimizer_steps": 116,
         }
-        restored_nimg = int(state["cur_nimg"])
-        restored_tick = int(state["cur_tick"])
-        self.assertEqual(restored_nimg, 16000)
-        self.assertEqual(restored_tick, 1)
+        self.assertEqual(int(state["cur_nimg"]), 16000)
+        self.assertEqual(int(state["cur_tick"]), 2)
+        self.assertEqual(int(state["tick_start_nimg"]), 16000)
+        self.assertNotEqual(int(state["tick_start_nimg"]), tick_start_nimg)
         # Filename-derived estimate would be wrong for short runs.
         resume_tick_from_name = 1
         kimg_per_tick = 50
         wrong = resume_tick_from_name * kimg_per_tick * 1000
-        self.assertNotEqual(wrong, restored_nimg)
+        self.assertNotEqual(wrong, int(state["cur_nimg"]))
+
+    def test_activation_expected_kimg_uses_batch_rounding(self):
+        from scripts.collect_schedule_results import expected_final_nimg
+
+        nimg = expected_final_nimg(0.004, 128)
+        self.assertEqual(nimg, 4096)
+        self.assertEqual(nimg / 128, 32)
+
+    def test_asset_sha_mismatch_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(run_dir, data_path=data, transfer_path=transfer)
+            # Corrupt the recorded train-time hash.
+            lines = []
+            for line in (run_dir / "run_meta.env").read_text(encoding="utf-8").splitlines():
+                if line.startswith("data_sha256="):
+                    lines.append("data_sha256=" + ("0" * 64))
+                else:
+                    lines.append(line)
+            (run_dir / "run_meta.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLLECTOR),
+                    "--run-dir",
+                    str(run_dir),
+                    "--outdir",
+                    str(outdir),
+                    "--data",
+                    str(data),
+                    "--transfer",
+                    str(transfer),
+                    "--mode",
+                    "stability",
+                    "--schedule",
+                    "sigmoid",
+                    "--allow-dirty",
+                    "--skip-snapshot-load",
+                    "--skip-training-state-load",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("dataset SHA mismatch", completed.stderr)
+
+    def test_outdir_nonempty_requires_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            outdir.mkdir()
+            (outdir / "metadata.json").write_text("{}", encoding="utf-8")
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(run_dir, data_path=data, transfer_path=transfer)
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLLECTOR),
+                    "--run-dir",
+                    str(run_dir),
+                    "--outdir",
+                    str(outdir),
+                    "--data",
+                    str(data),
+                    "--transfer",
+                    str(transfer),
+                    "--mode",
+                    "stability",
+                    "--schedule",
+                    "sigmoid",
+                    "--allow-dirty",
+                    "--skip-snapshot-load",
+                    "--skip-training-state-load",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("outdir is not empty", completed.stderr)
 
 
 if __name__ == "__main__":

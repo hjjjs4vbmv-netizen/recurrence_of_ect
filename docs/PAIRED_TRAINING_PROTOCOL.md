@@ -42,7 +42,7 @@ Except for `--schedule` / `--mapping`, both arms use:
 | Mode | Duration (Mimg) | Intent |
 | --- | --- | --- |
 | `dry-run` | n/a | Print resolved params + exact command |
-| `activation` | 0.004 | ~31 attempted iterations; Role C adaptive activation check |
+| `activation` | 0.004 | 32 attempted iterations @ batch 128 (ends at 4.096 kimg after batch rounding); Role C adaptive activation check |
 | `stability` | 0.016 | ~125 attempted iterations @ batch 128 |
 | `baseline` | 0.128 | ~1000 attempted iterations @ batch 128 |
 
@@ -79,9 +79,10 @@ attempted iteration:
 - `elapsed_sec`
 - `peak_vram_gb`
 
-Counters are stored in `training-state-*.pt` and restored on resume. Fresh runs
-refuse to append an existing non-empty CSV; legal resumes append only after
-validating the last row against restored counters / `cur_nimg`.
+Counters and exact progress (`cur_nimg`, next-loop `cur_tick`,
+`tick_start_nimg`) are stored in `training-state-*.pt` and restored on resume.
+Fresh runs refuse to append an existing non-empty CSV; legal resumes append only
+after validating the last row against restored counters / `cur_nimg` / schedule.
 
 Adaptive-only fields (`loss_ema`, `correction`, …) are reserved for Role C.
 
