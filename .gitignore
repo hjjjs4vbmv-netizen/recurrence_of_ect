@@ -164,6 +164,7 @@ cython_debug/
 datasets/
 runs/
 checkpoints/
+pretrained/
 ct-runs/
 ct-evals/
 wandb/
