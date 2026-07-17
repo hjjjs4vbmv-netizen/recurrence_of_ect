@@ -213,6 +213,8 @@ class RunnerInfraTests(unittest.TestCase):
                 or ("fresh run requires empty outdir" in completed.stderr),
                 completed.stderr,
             )
+
+    def test_dry_run_resume_excludes_transfer(self):
         with tempfile.TemporaryDirectory() as tmp:
             resume = Path(tmp) / "training-state-latest.pt"
             resume.write_bytes(b"x")
@@ -238,37 +240,6 @@ class RunnerInfraTests(unittest.TestCase):
             )
             self.assertIn("--resume=", completed.stdout)
             self.assertNotIn("--transfer=", completed.stdout)
-
-    def test_fresh_nonempty_outdir_fails(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            outdir = Path(tmp) / "busy"
-            outdir.mkdir()
-            (outdir / "marker").write_text("x", encoding="utf-8")
-            data = Path(tmp) / "data.zip"
-            transfer = Path(tmp) / "transfer.pkl"
-            write_dummy_asset(data)
-            write_dummy_asset(transfer)
-            env = os.environ.copy()
-            env["ECT_DATA_PATH"] = str(data)
-            env["ECT_TRANSFER_PATH"] = str(transfer)
-            completed = subprocess.run(
-                [
-                    "bash",
-                    str(RUNNER),
-                    "--schedule",
-                    "sigmoid",
-                    "--mode",
-                    "stability",
-                    "--outdir",
-                    str(outdir),
-                ],
-                cwd=REPO_ROOT,
-                env=env,
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("fresh run requires empty outdir", completed.stderr)
 
 
 class CollectorInfraTests(unittest.TestCase):
