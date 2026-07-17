@@ -12,6 +12,7 @@ from scripts.sample_fixed_seeds import (
     assert_work_group_equivalence,
     build_metadata,
     configure_precision,
+    extract_training_schedule_metadata,
     generate_uint8,
     make_checkpoint_id,
     save_mode_outputs,
@@ -35,6 +36,18 @@ class DummyNet(torch.nn.Module):
         # sampler must still be invariant to its outer work-group size.
         batch_term = x.mean(dim=0, keepdim=True) * 0.01
         return torch.tanh((x + batch_term) / 80)
+
+
+class DummyLoss:
+    def schedule_metadata(self):
+        return {
+            "name": "adaptive_v1",
+            "enabled": True,
+            "signal": "loss_ema",
+            "loss_ema_beta": 0.9,
+            "max_adjust": 0.05,
+            "min_gap": 0.001,
+        }
 
 
 class FixedSeedSamplingTest(unittest.TestCase):
@@ -144,6 +157,7 @@ class FixedSeedSamplingTest(unittest.TestCase):
             seeds=self.seeds,
             modes=modes,
             elapsed_seconds=3.0,
+            training_schedule=extract_training_schedule_metadata({"loss_fn": DummyLoss()}),
         )
         self.assertEqual(metadata["schema_version"], "1.0")
         self.assertEqual(metadata["nfe_modes"], [1, 2])
@@ -151,7 +165,15 @@ class FixedSeedSamplingTest(unittest.TestCase):
         self.assertEqual(metadata["image_count_by_mode"], {"nfe1": 64, "nfe2": 64})
         self.assertEqual(metadata["image_count_total"], 128)
         self.assertEqual(metadata["model_forward_batch_size"], 1)
+        self.assertEqual(metadata["training_schedule"]["name"], "adaptive_v1")
+        self.assertEqual(metadata["training_schedule"]["signal"], "loss_ema")
+        self.assertEqual(metadata["training_schedule"]["loss_ema_beta"], 0.9)
+        self.assertEqual(metadata["training_schedule"]["max_adjust"], 0.05)
+        self.assertEqual(metadata["training_schedule"]["min_gap"], 0.001)
         self.assertTrue(metadata["determinism_passed"])
+
+    def test_old_checkpoint_without_loss_has_no_schedule_metadata(self):
+        self.assertIsNone(extract_training_schedule_metadata({"ema": self.net}))
 
     def test_manifest_covers_images_grids_and_metadata(self):
         with TemporaryDirectory() as temp_dir:

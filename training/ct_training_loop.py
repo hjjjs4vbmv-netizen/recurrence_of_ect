@@ -14,15 +14,6 @@ from torch_utils import training_stats
 from torch_utils import misc
 
 from metrics import metric_main
-from training.schedules import continuous_stage
-
-#----------------------------------------------------------------------------
-
-def _schedule_stage(schedule_name, cur_tick, double_ticks):
-    """Return the legacy integer stage unless a continuous schedule is explicit."""
-    if schedule_name == 'adaptive_v1':
-        return continuous_stage(cur_tick=cur_tick, double_ticks=double_ticks)
-    return cur_tick // double_ticks
 
 #----------------------------------------------------------------------------
 
@@ -216,6 +207,8 @@ def training_loop(
         data = torch.load(resume_state_dump, map_location=torch.device('cpu'))
         misc.copy_params_and_buffers(src_module=data['net'], dst_module=net, require_all=True)
         optimizer.load_state_dict(data['optimizer_state'])
+        if 'loss_fn_state' in data and hasattr(loss_fn, 'load_schedule_state_dict'):
+            loss_fn.load_schedule_state_dict(data['loss_fn_state'])
         if enable_amp:
             if 'gradscaler_state' in data:
                 # NOTE(aiihn): Although not loading the state_dict of the GradScaler works well,
@@ -260,17 +253,17 @@ def training_loop(
 
     # Prepare for the mapping fn p(r|t).
     schedule_name = getattr(getattr(loss_fn, 'schedule', None), 'name', None)
-    continuous_schedule = schedule_name == 'adaptive_v1'
-    if continuous_schedule:
-        dist.print0(f'Reduce dt continuously over {double_ticks} ticks per stage.')
-    else:
-        dist.print0(f'Reduce dt every {double_ticks} ticks.')
+    adaptive_loss_collector = (
+        training_stats.Collector(regex='Loss/loss')
+        if schedule_name == 'adaptive_v1' else None
+    )
+    dist.print0(f'Reduce dt every {double_ticks} ticks.')
     
     def update_scheduler(loss_fn):
         loss_fn.update_schedule(stage)
         dist.print0(f'Update scheduler at {cur_tick} ticks, {cur_nimg / 1e3} kimg, ratio {loss_fn.ratio}')
         
-    stage = _schedule_stage(schedule_name, cur_tick, double_ticks)
+    stage = cur_tick // double_ticks
     update_scheduler(loss_fn)
 
     while True:
@@ -327,6 +320,16 @@ def training_loop(
         if (not done) and (cur_tick != 0) and (cur_nimg < tick_start_nimg + kimg_per_tick * 1000):
             continue
 
+        # adaptive_v1 consumes the globally aggregated tick loss before any
+        # checkpoint is written, so its serialized state matches the model.
+        if adaptive_loss_collector is not None:
+            adaptive_loss_collector.update()
+            loss_fn.update_training_signal(adaptive_loss_collector['Loss/loss'])
+            schedule_info = loss_fn.schedule_metadata()
+            if schedule_info['loss_ema'] is not None:
+                training_stats.report('Adaptive/loss_ema', schedule_info['loss_ema'])
+            training_stats.report('Adaptive/ratio_correction', schedule_info['correction'])
+
         # Print status line, accumulating the same information in training_stats.
         tick_end_time = time.time()
         fields = []
@@ -366,6 +369,8 @@ def training_loop(
         # Save full dump of the training state.
         if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
             data = dict(net=net, optimizer_state=optimizer.state_dict())
+            if hasattr(loss_fn, 'schedule_state_dict'):
+                data['loss_fn_state'] = loss_fn.schedule_state_dict()
             if enable_amp:
                 data.update(gradscaler_state=scaler.state_dict())
             torch.save(data, os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'))
@@ -387,6 +392,8 @@ def training_loop(
 
             if dist.get_rank() == 0:
                 data = dict(net=net, optimizer_state=optimizer.state_dict())
+                if hasattr(loss_fn, 'schedule_state_dict'):
+                    data['loss_fn_state'] = loss_fn.schedule_state_dict()
                 if enable_amp:
                     data.update(gradscaler_state=scaler.state_dict())
                 torch.save(data, os.path.join(run_dir, f'training-state-latest.pt'))
@@ -433,12 +440,8 @@ def training_loop(
             break
         
         # Update Scheduler
-        if continuous_schedule:
-            new_stage = _schedule_stage(schedule_name, cur_tick, double_ticks)
-        else:
-            # Preserve the official const/sigmoid boundary behavior exactly.
-            new_stage = _schedule_stage(schedule_name, cur_tick - 1, double_ticks)
-        if continuous_schedule or new_stage > stage:
+        new_stage = (cur_tick-1) // double_ticks
+        if new_stage > stage:
             stage = new_stage
             update_scheduler(loss_fn)
     

@@ -25,9 +25,9 @@ def devices():
     return ['cpu'] + (['cuda'] if torch.cuda.is_available() else [])
 
 
-def make_loss(adj, q=2.0, k=8.0, b=1.0):
+def make_loss(adj, q=2.0, k=8.0, b=1.0, **kwargs):
     with contextlib.redirect_stdout(io.StringIO()):  # silence dist.print0
-        return ECMLoss(q=q, k=k, b=b, adj=adj)
+        return ECMLoss(q=q, k=k, b=b, adj=adj, **kwargs)
 
 
 def official_t_to_r(adj, t, stage, q=2.0, k=8.0, b=1.0):
@@ -88,34 +88,100 @@ class OfficialFormulaParityTest(unittest.TestCase):
 
 
 class AdaptiveV1Test(unittest.TestCase):
-    def test_matches_official_sigmoid_at_integer_stages(self):
+    def test_without_signal_is_official_sigmoid_with_safety_cap(self):
         for device in devices():
             for q in [2.0, 256.0]:
                 for stage in [0, 1, 3, 7]:
                     with self.subTest(device=device, q=q, stage=stage):
                         t = sample_t(device=device)
                         expected = official_t_to_r('sigmoid', t, stage, q=q)
-                        actual = compute_r(t=t, stage=stage, schedule='adaptive_v1', q=q)
+                        adaptive = get_schedule('adaptive_v1', q=q)
+                        actual = adaptive.compute_r(t=t, stage=stage)
+                        expected = torch.minimum(expected, t * (1 - adaptive.min_gap))
                         self.assertTrue(torch.equal(actual, expected))
 
-    def test_fractional_stage_stays_between_bracketing_stages(self):
+    def test_loss_improvement_tightens_gap_with_bounded_correction(self):
         t = sample_t()
-        adaptive = get_schedule('adaptive_v1', q=2.0)
+        adaptive = get_schedule(
+            'adaptive_v1', q=2.0, loss_ema_beta=0.0,
+            max_adjust=0.1, min_gap=0.01,
+        )
         baseline = get_schedule('sigmoid', q=2.0)
-        for lo in [0, 1, 4]:
-            with self.subTest(lo=lo):
-                r_lo = baseline.compute_r(t=t, stage=lo)
-                r_hi = baseline.compute_r(t=t, stage=lo + 1)
-                r_mid = adaptive.compute_r(t=t, stage=lo + 0.5)
-                self.assertTrue((r_mid >= r_lo).all())
-                self.assertTrue((r_mid <= r_hi).all())
+        adaptive.update_training_signal(10.0)
+        adaptive.update_training_signal(5.0)
+        base_r = baseline.compute_r(t=t, stage=2)
+        adaptive_r = adaptive.compute_r(t=t, stage=2)
+        self.assertTrue((adaptive_r >= base_r).all())
+        self.assertLessEqual(adaptive.correction(), 0.1)
+        self.assertTrue((adaptive_r / t <= 0.99).all())
 
-    def test_r_tightens_monotonically_with_progress(self):
+    def test_loss_worsening_widens_gap(self):
         t = sample_t()
-        adaptive = get_schedule('adaptive_v1', q=2.0)
-        rs = [adaptive.compute_r(t=t, stage=s) for s in [0, 0.25, 0.5, 1.0, 1.75, 3.0, 6.5]]
-        for r_prev, r_next in zip(rs, rs[1:]):
-            self.assertTrue((r_next >= r_prev).all())
+        adaptive = get_schedule('adaptive_v1', loss_ema_beta=0.0, max_adjust=0.1)
+        baseline = get_schedule('sigmoid')
+        adaptive.update_training_signal(10.0)
+        adaptive.update_training_signal(20.0)
+        self.assertLess(adaptive.correction(), 0)
+        self.assertTrue((adaptive.compute_r(t=t, stage=2) <= baseline.compute_r(t=t, stage=2)).all())
+
+    def test_output_is_finite_bounded_and_deterministic(self):
+        t = torch.tensor([0.0, 1e-12, 0.1, 1.0, 80.0, float('inf'), float('nan')])
+        first = get_schedule('adaptive_v1', loss_ema_beta=0.5)
+        second = get_schedule('adaptive_v1', loss_ema_beta=0.5)
+        for loss in [10.0, 8.0, 6.0]:
+            self.assertEqual(first.update_training_signal(loss), second.update_training_signal(loss))
+        r_first = first.compute_r(t=t, stage=3)
+        r_second = second.compute_r(t=t, stage=3)
+        self.assertTrue(torch.equal(r_first, r_second))
+        self.assertTrue(torch.isfinite(r_first).all())
+        self.assertTrue((r_first >= 0).all())
+        finite_t = torch.isfinite(t) & (t >= 0)
+        self.assertTrue((r_first[finite_t] <= t[finite_t]).all())
+
+        unusual_k = get_schedule('adaptive_v1', k=-100.0)
+        unusual_r = unusual_k.compute_r(t=t, stage=3)
+        self.assertTrue(torch.isfinite(unusual_r).all())
+        self.assertTrue((unusual_r[finite_t] <= t[finite_t]).all())
+
+        huge_stage_r = first.compute_r(t=t, stage=1e308)
+        self.assertTrue(torch.isfinite(huge_stage_r).all())
+        self.assertTrue((huge_stage_r[finite_t] <= t[finite_t]).all())
+
+    def test_nonfinite_loss_signal_is_ignored(self):
+        adaptive = get_schedule('adaptive_v1')
+        for loss in [float('nan'), float('inf'), -1.0]:
+            self.assertFalse(adaptive.update_training_signal(loss))
+        self.assertIsNone(adaptive.loss_ema)
+        self.assertEqual(adaptive.correction(), 0.0)
+
+    def test_invalid_adaptive_parameters_are_rejected(self):
+        invalid_kwargs = [
+            {'loss_ema_beta': 1.0},
+            {'max_adjust': -0.1},
+            {'min_gap': 0.0},
+            {'k': float('nan')},
+        ]
+        for kwargs in invalid_kwargs:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                get_schedule('adaptive_v1', **kwargs)
+
+    def test_zero_max_adjust_restores_official_formula_after_updates(self):
+        t = sample_t()
+        adaptive = get_schedule('adaptive_v1', max_adjust=0.0)
+        adaptive.update_training_signal(10.0)
+        adaptive.update_training_signal(1.0)
+        expected = get_schedule('sigmoid').compute_r(t=t, stage=5)
+        self.assertTrue(torch.equal(adaptive.compute_r(t=t, stage=5), expected))
+
+    def test_state_round_trip_preserves_output(self):
+        t = sample_t()
+        source = get_schedule('adaptive_v1', loss_ema_beta=0.8)
+        for loss in [10.0, 9.0, 7.0]:
+            source.update_training_signal(loss)
+        clone = get_schedule('adaptive_v1', loss_ema_beta=0.8)
+        clone.load_state_dict(source.state_dict())
+        self.assertEqual(clone.metadata(), source.metadata())
+        self.assertTrue(torch.equal(clone.compute_r(t=t, stage=2), source.compute_r(t=t, stage=2)))
 
     def test_negative_stage_rejected(self):
         with self.assertRaises(ValueError):
@@ -187,6 +253,19 @@ class ECMLossIntegrationTest(unittest.TestCase):
         loss_fn = make_loss('sigmoid', q=256.0, k=4.0, b=2.0)
         self.assertEqual((loss_fn.schedule.q, loss_fn.schedule.k, loss_fn.schedule.b), (256.0, 4.0, 2.0))
 
+    def test_adaptive_hyperparams_reach_schedule_metadata(self):
+        loss_fn = make_loss(
+            'adaptive_v1', adaptive_loss_ema_beta=0.8,
+            adaptive_max_adjust=0.04, adaptive_min_gap=0.002,
+        )
+        metadata = loss_fn.schedule_metadata()
+        self.assertEqual(metadata['name'], 'adaptive_v1')
+        self.assertTrue(metadata['enabled'])
+        self.assertEqual(metadata['signal'], 'loss_ema')
+        self.assertEqual(metadata['loss_ema_beta'], 0.8)
+        self.assertEqual(metadata['max_adjust'], 0.04)
+        self.assertEqual(metadata['min_gap'], 0.002)
+
     def test_unknown_adj_still_raises_value_error(self):
         with self.assertRaises(ValueError):
             make_loss('cosine')
@@ -202,10 +281,35 @@ class ECMLossIntegrationTest(unittest.TestCase):
         # schedule attribute must round-trip through persistence.
         loss_fn = make_loss('adaptive_v1', q=2.0)
         loss_fn.update_schedule(2)
+        loss_fn.update_training_signal(10.0)
+        loss_fn.update_training_signal(7.0)
         clone = pickle.loads(pickle.dumps(loss_fn))
         t = sample_t()
+        self.assertEqual(clone.schedule_metadata(), loss_fn.schedule_metadata())
         self.assertTrue(torch.equal(clone.schedule.compute_r(t=t, stage=clone.stage),
                                     loss_fn.schedule.compute_r(t=t, stage=loss_fn.stage)))
+
+    def test_schedule_state_dict_restores_adaptive_state(self):
+        source = make_loss('adaptive_v1', q=2.0)
+        source.update_schedule(3)
+        source.update_training_signal(10.0)
+        source.update_training_signal(8.0)
+        clone = make_loss('adaptive_v1', q=2.0)
+        clone.load_schedule_state_dict(source.schedule_state_dict())
+        self.assertEqual(clone.schedule_metadata(), source.schedule_metadata())
+
+    def test_explicit_fixed_schedule_ignores_saved_adaptive_state(self):
+        adaptive = make_loss('adaptive_v1')
+        adaptive.update_training_signal(10.0)
+        adaptive.update_training_signal(5.0)
+        fixed = make_loss('sigmoid')
+        self.assertFalse(fixed.load_schedule_state_dict(adaptive.schedule_state_dict()))
+        t = sample_t()
+        fixed.update_schedule(2)
+        self.assertTrue(torch.equal(
+            fixed.schedule.compute_r(t=t, stage=fixed.stage),
+            fixed.t_to_r_sigmoid(t),
+        ))
 
 
 class TinyNet(torch.nn.Module):
@@ -217,9 +321,11 @@ class TinyNet(torch.nn.Module):
 class ECMLossCallCudaTest(unittest.TestCase):
     """End-to-end __call__ checks; run on the A100 (skipped on cpu-only)."""
 
-    def full_loss(self, adj, stage, seed=0):
+    def full_loss(self, adj, stage, seed=0, losses=()):
         loss_fn = make_loss(adj, q=2.0, k=8.0, b=1.0)
         loss_fn.update_schedule(stage)
+        for loss in losses:
+            loss_fn.update_training_signal(loss)
         net = TinyNet().cuda()
         torch.manual_seed(seed)
         images = torch.randn([8, 3, 8, 8], device='cuda')
@@ -230,9 +336,10 @@ class ECMLossCallCudaTest(unittest.TestCase):
         self.assertTrue(torch.equal(self.full_loss('sigmoid', stage=1),
                                     self.full_loss('adaptive_v1', stage=1)))
 
-    def test_call_adaptive_v1_fractional_stage_changes_loss(self):
-        self.assertFalse(torch.equal(self.full_loss('adaptive_v1', stage=1),
-                                     self.full_loss('adaptive_v1', stage=1.5)))
+    def test_call_adaptive_v1_loss_signal_changes_loss(self):
+        baseline = self.full_loss('adaptive_v1', stage=1)
+        adapted = self.full_loss('adaptive_v1', stage=1, losses=(10.0, 5.0))
+        self.assertFalse(torch.equal(baseline, adapted))
 
 
 if __name__ == '__main__':

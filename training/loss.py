@@ -12,7 +12,9 @@ from training.schedules import get_schedule
 
 @persistence.persistent_class
 class ECMLoss:
-    def __init__(self, P_mean=-1.1, P_std=2.0, sigma_data=0.5, q=2, c=0.0, k=8.0, b=1.0, cut=4.0, adj='sigmoid'):
+    def __init__(self, P_mean=-1.1, P_std=2.0, sigma_data=0.5, q=2, c=0.0, k=8.0, b=1.0, cut=4.0,
+                 adj='sigmoid', adaptive_loss_ema_beta=0.9, adaptive_max_adjust=0.05,
+                 adaptive_min_gap=1e-3):
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
@@ -21,7 +23,14 @@ class ECMLoss:
         # 'const' / 'sigmoid' are the official fixed formulas (bit-identical
         # to the reference methods below); 'adaptive_v1' is the Role C
         # experiment.
-        self.schedule = get_schedule(adj, q=q, k=k, b=b)
+        schedule_kwargs = dict(q=q, k=k, b=b)
+        if adj == 'adaptive_v1':
+            schedule_kwargs.update(
+                loss_ema_beta=adaptive_loss_ema_beta,
+                max_adjust=adaptive_max_adjust,
+                min_gap=adaptive_min_gap,
+            )
+        self.schedule = get_schedule(adj, **schedule_kwargs)
 
         self.q = q
         self.stage = 0
@@ -36,6 +45,31 @@ class ECMLoss:
     def update_schedule(self, stage):
         self.stage = stage
         self.ratio = 1 - 1 / self.q ** (stage+1)
+
+    def update_training_signal(self, loss):
+        return self.schedule.update_training_signal(loss)
+
+    def schedule_state_dict(self):
+        return {
+            'schedule_name': self.schedule.name,
+            'stage': self.stage,
+            'ratio': self.ratio,
+            'schedule': self.schedule.state_dict(),
+        }
+
+    def load_schedule_state_dict(self, state):
+        saved_name = state.get('schedule_name')
+        if saved_name is not None and saved_name != self.schedule.name:
+            return False
+        self.stage = state.get('stage', self.stage)
+        self.ratio = state.get('ratio', self.ratio)
+        self.schedule.load_state_dict(state.get('schedule', {}))
+        return True
+
+    def schedule_metadata(self):
+        metadata = self.schedule.metadata()
+        metadata.update(stage=self.stage, ratio=self.ratio)
+        return metadata
 
     # Official fixed t->r formulas, kept verbatim as the parity reference for
     # tests/test_schedules.py; the training path dispatches through

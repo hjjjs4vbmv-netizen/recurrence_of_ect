@@ -156,9 +156,17 @@ def configure_precision(net, requested, device):
     return requested
 
 
+def extract_training_schedule_metadata(checkpoint):
+    loss_fn = checkpoint.get("loss_fn")
+    if loss_fn is None or not hasattr(loss_fn, "schedule_metadata"):
+        return None
+    return loss_fn.schedule_metadata()
+
+
 def build_metadata(
     *, args, checkpoint_sha256, checkpoint_id, run_dir, net,
     effective_precision, seeds, modes, elapsed_seconds,
+    training_schedule=None,
 ):
     mode_names = [mode["name"] for mode in modes]
     return {
@@ -201,6 +209,7 @@ def build_metadata(
         "determinism_passed": True,
         "repeat_runs_verified": 2,
         "verified_modes": mode_names,
+        "training_schedule": training_schedule,
     }
 
 
@@ -238,6 +247,7 @@ def main():
     run_dir = args.outdir / checkpoint_id
     run_dir.mkdir(parents=True, exist_ok=True)
     data = pickle.loads(checkpoint_bytes)
+    training_schedule = extract_training_schedule_metadata(data)
     net = data["ema"].eval().requires_grad_(False).to(args.device)
     effective_precision = configure_precision(net, args.precision, args.device)
 
@@ -278,6 +288,7 @@ def main():
         seeds=seeds,
         modes=modes,
         elapsed_seconds=elapsed_seconds,
+        training_schedule=training_schedule,
     )
     metadata_path = run_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

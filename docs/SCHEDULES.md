@@ -26,10 +26,10 @@ r = compute_r(t=t, stage=stage, schedule="sigmoid", q=256, k=8, b=1)
 
 - `t`：任意形状的 torch 张量（训练循环里是 `[N,1,1,1]`），也接受
   python/numpy 标量或数组（内部 `torch.as_tensor` 转换）；返回同形状张量，
-  恒有 `0 <= r < t`。
-- `stage`：训练循环维护的课程阶段；`const` / `sigmoid` 保持官方
-  `cur_tick // double_ticks` 的整数 stage，只有显式选择 `adaptive_v1` 时才使用
-  `cur_tick / double_ticks` 的小数 stage。
+  恒有 `0 <= r <= t`。
+- `stage`：训练循环维护的课程阶段；三种调度均保持官方
+  `cur_tick // double_ticks` 的整数 stage。`adaptive_v1` 只根据 loss EMA
+  修正 `r/t`，不另外改变 stage 课程。
 - 超参默认与 `ct_train.py` CLI 一致：`q=2.0, k=8.0, b=1.0`。
 - 兼容 `ECMLoss` 的有状态用法：`schedule.update_schedule(stage)` 后调
   `schedule.t_to_r(t)`。
@@ -40,7 +40,7 @@ r = compute_r(t=t, stage=stage, schedule="sigmoid", q=256, k=8, b=1)
 | :-- | :-- | :-- |
 | `const` | `r/t = 1 - decay` | 官方 Eq.(17)，`ECMLoss.t_to_r_const` 原样移植 |
 | `sigmoid` | `r/t = 1 - decay * n(t)`，`n(t) = 1 + k*sigmoid(-b*t)` | 官方 Eq.(18)，训练默认，`ECMLoss.t_to_r_sigmoid` 原样移植 |
-| `adaptive_v1` | 同 `sigmoid`，但 `stage` 允许小数 | Role C 实验 v1 |
+| `adaptive_v1` | 官方 `sigmoid` ratio + loss EMA 驱动的有界修正 | Role C 实验 v1 |
 
 **官方 fixed 公式不变的保证**：官方公式方法 `t_to_r_const` / `t_to_r_sigmoid`
 **原样保留**在 `training/loss.py` 中作为 parity 基准（训练路径不再调用它们，
@@ -50,21 +50,37 @@ r = compute_r(t=t, stage=stage, schedule="sigmoid", q=256, k=8, b=1)
 `self.schedule.compute_r` 入口与参考方法按位一致。任何一侧公式被改动，测试
 都会失败。
 
-## adaptive_v1 设计（v1，待评审）
+## adaptive_v1 设计
 
-- **动机**：官方每 `double_ticks` 个 tick 令 `decay` 突降为 `1/q`
-  倍，`Δt = t - r` 随之跳变，训练损失尺度在阶段边界出现阶跃。
-- **定义**：沿用 sigmoid 公式，把 `stage` 换成连续训练进度
-  `stage = cur_tick / double_ticks`（模块提供 `continuous_stage()` 帮助函数），
-  使 `Δt` 随进度几何平滑收缩。
-- **性质**（均有测试）：整数 stage 处与官方 `sigmoid` **按位一致**（每个阶段
-  起点锚定 baseline）；小数 stage 的 `r` 落在相邻两个整数 stage 之间；`r`
-  随进度单调收紧；不引入任何新超参。
-- **接入状态**：`training/loss.py` 与训练循环已接入。新命令可显式使用
-  `--schedule adaptive_v1`；原有 `--mapping` 保留为完整兼容的别名。不传两者时
-  默认仍是 `sigmoid`，`const` / `sigmoid` 的整数 stage 更新路径不变；
-  只有 `adaptive_v1` 每个 tick 更新小数 stage。`loss_fn.ratio` /
-  `update_schedule` 契约和 snapshot pickle 往返保持不变。
+设官方 sigmoid 比率为 `rho_0 = r/t`，首个有限 loss EMA 为 `L_0`，
+当前 loss EMA 为 `L_ema`：
+
+```text
+score = tanh(log(L_0) - log(L_ema))
+delta = adaptive_max_adjust * score
+rho   = clamp(rho_0 + delta, 0, 1 - adaptive_min_gap)
+r     = t * rho
+```
+
+- loss 下降时 `delta > 0`，减小 `t-r`，加强一致性约束；
+- loss 恶化时 `delta < 0`，增大 `t-r`，降低当前任务难度；
+- `|delta| <= adaptive_max_adjust`，不做搜索或额外控制器；
+- 非有限、负数 loss 信号直接忽略；输出做有限化和边界 clamp，
+  保证 `0 <= r <= t`且不产生 NaN/Inf；
+- tick loss 通过现有 `training_stats.Collector` 在所有 rank 上聚合，再更新 EMA，
+  同样输入与状态下各 rank 使用同一修正值。
+
+默认参数只是首版单点配置，不代表完成大范围搜索：
+
+| CLI | 默认值 | 含义 |
+| :-- | --: | :-- |
+| `--adaptive-loss-ema-beta` | `0.9` | loss EMA 平滑系数 |
+| `--adaptive-max-adjust` | `0.05` | `r/t` 最大绝对修正 |
+| `--adaptive-min-gap` | `0.001` | 开启修正时的最小 `(t-r)/t` |
+
+adaptive 运行状态会随 training-state 保存/恢复；完整参数与当前 EMA、
+参考 loss、修正值会写入 checkpoint 中的 `loss_fn`，并由固定种子评估
+metadata 记录为 `training_schedule`。
 
 ### CLI 兼容性
 
@@ -76,10 +92,16 @@ python ct_train.py ... --mapping const
 
 # 新入口
 python ct_train.py ... --schedule adaptive_v1
+# 同时接受连字符写法 adaptive-v1，内部统一记录为 adaptive_v1
+
+# 显式关闭，严格恢复官方 fixed sigmoid
+python ct_train.py ... --schedule sigmoid
 ```
 
 `--schedule` 与 `--mapping` 指向同一个内部 `mapping` 字段，因此旧的配置
-传递、`loss_kwargs.adj` 和日志结构不会因参数改名而变化。
+传递、`loss_kwargs.adj` 和日志结构不会因参数改名而变化。不传
+两者时仍默认 `sigmoid`，不会创建 adaptive loss Collector 或改变官方
+stage 边界。
 
 ## 现有 run 配置下的 stage 行为（供对照）
 
@@ -91,7 +113,7 @@ python ct_train.py ... --schedule adaptive_v1
 ## 验证
 
 ```bash
-python -m unittest tests.test_schedules -v   # 24 个用例；其中 2 个端到端
-                                             # __call__ 用例需 CUDA（A100 激活）
+python -m unittest tests.test_schedules tests.test_training_cli_compat -v
+# 其中 2 个 ECMLoss.__call__ 端到端用例需 CUDA（A100 激活）
 python -m training.schedules                 # 打印三种调度的 r/t 表
 ```
