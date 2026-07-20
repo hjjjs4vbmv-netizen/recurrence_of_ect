@@ -629,7 +629,10 @@ def training_loop(
             cur_nimg=cur_nimg,
             cur_tick=cur_tick + 1,
             tick_start_nimg=cur_nimg,
-            elapsed_sec=elapsed_base_sec + (time.time() - start_time),
+            # Match the final CSV row exactly; resume timing continues from
+            # the last completed attempted iteration rather than from later
+            # checkpoint I/O and maintenance work.
+            elapsed_sec=elapsed_sec,
         )
         if hasattr(loss_fn, 'schedule_state_dict'):
             data['loss_fn_state'] = loss_fn.schedule_state_dict()

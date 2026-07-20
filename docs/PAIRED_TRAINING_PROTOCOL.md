@@ -133,6 +133,16 @@ historical prefix is permitted, but an empty row after telemetry begins is not.
 `metadata.json` records telemetry row count, total row count, coverage, and the
 first iteration with telemetry so partial historical coverage is auditable.
 
+For `--mode activation --schedule adaptive_v1`, packaging is also an activation
+gate, not merely a CSV-format check. It fails unless the final controller state
+has `signal_updates >= 3` and `adaptive_active=true`, a nonzero correction has
+been observed, its next iteration exists before the final iteration, and at
+least four attempted iterations remain after that controller update.
+`first_nonzero_correction_iteration` is the end-of-iteration controller update;
+`first_adapted_pair_iteration` is exactly the following iteration, where that
+correction first enters `r(t)`. The pair telemetry on the former iteration was
+sampled before the update and must not be described as adapted.
+
 Automatically records train-time HEAD from `run_meta.env`, packaging-time HEAD,
 dirty status, exact command, asset SHA256 digests, and runtime metadata.
 Packaging fails closed unless train-time and packaging HEADs match, and unless

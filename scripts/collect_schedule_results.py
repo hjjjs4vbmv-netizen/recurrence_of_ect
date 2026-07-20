@@ -52,6 +52,9 @@ MODE_DURATION_MIMG = {
     "baseline": 0.128,
 }
 
+ACTIVATION_MIN_SIGNAL_UPDATES = 3
+ACTIVATION_MIN_FOLLOWING_ITERATIONS = 4
+
 
 def expected_final_nimg(duration_mimg: float, global_batch: int) -> int:
     """Match ct_train/ct_training_loop discrete batch completion.
@@ -64,6 +67,66 @@ def expected_final_nimg(duration_mimg: float, global_batch: int) -> int:
     target_kimg = max(int(duration_mimg * 1000), 1)
     target_nimg = target_kimg * 1000
     return math.ceil(target_nimg / global_batch) * global_batch
+
+
+def adaptive_runtime_summary(packaged: list[dict]) -> dict:
+    """Derive auditable controller/pair activation boundaries from CSV rows.
+
+    Telemetry is sampled at the end of an attempted iteration. Therefore, a
+    correction first observed in iteration N can first affect the pair drawn
+    for iteration N + 1, never the pair metrics recorded on iteration N.
+    """
+    final_iteration = packaged[-1]["attempted_iteration"]
+    final_signal_updates = packaged[-1]["signal_updates"]
+    final_adaptive_active = packaged[-1]["adaptive_active"]
+    first_nonzero_correction_iteration = next(
+        (
+            row["attempted_iteration"] for row in packaged
+            if row["correction"] is not None and row["correction"] != 0
+        ),
+        None,
+    )
+    first_adapted_pair_iteration = None
+    if first_nonzero_correction_iteration is not None:
+        candidate = first_nonzero_correction_iteration + 1
+        if candidate <= final_iteration:
+            first_adapted_pair_iteration = candidate
+    return {
+        "final_signal_updates": final_signal_updates,
+        "final_adaptive_active": final_adaptive_active,
+        "first_nonzero_correction_iteration": first_nonzero_correction_iteration,
+        "first_adapted_pair_iteration": first_adapted_pair_iteration,
+    }
+
+
+def enforce_adaptive_activation_gate(runtime_summary: dict, final_iteration: int) -> None:
+    """Require an activation run to exercise correction during training."""
+    signal_updates = runtime_summary["final_signal_updates"]
+    if signal_updates is None or signal_updates < ACTIVATION_MIN_SIGNAL_UPDATES:
+        fail(
+            "activation gate: final_signal_updates must be "
+            f">= {ACTIVATION_MIN_SIGNAL_UPDATES}, got {signal_updates}"
+        )
+    if runtime_summary["first_nonzero_correction_iteration"] is None:
+        fail("activation gate: first_nonzero_correction_iteration is required")
+    if runtime_summary["final_adaptive_active"] is not True:
+        fail("activation gate: final adaptive_active must be true")
+
+    first_correction = runtime_summary["first_nonzero_correction_iteration"]
+    first_adapted_pair = runtime_summary["first_adapted_pair_iteration"]
+    if first_adapted_pair is None or first_adapted_pair >= final_iteration:
+        fail(
+            "activation gate: first_adapted_pair_iteration must be before "
+            f"final_iteration (correction={first_correction}, "
+            f"adapted_pair={first_adapted_pair}, final={final_iteration})"
+        )
+    following_iterations = final_iteration - first_correction
+    if following_iterations < ACTIVATION_MIN_FOLLOWING_ITERATIONS:
+        fail(
+            "activation gate: nonzero correction must be followed by at least "
+            f"{ACTIVATION_MIN_FOLLOWING_ITERATIONS} attempted iterations "
+            f"(correction={first_correction}, final={final_iteration})"
+        )
 
 
 def fail(message: str) -> None:
@@ -300,6 +363,137 @@ def extract_duration_from_command(exact_command: str) -> float | None:
         if token.startswith("--duration="):
             return float(token.split("=", 1)[1])
     return None
+
+
+def extract_tick_kimg_from_command(exact_command: str) -> float:
+    """Read --tick from the recorded command, matching ct_train's default."""
+    try:
+        tokens = shlex.split(exact_command)
+    except ValueError:
+        tokens = exact_command.split()
+    for index, token in enumerate(tokens):
+        if token.startswith("--tick="):
+            value = token.split("=", 1)[1]
+            break
+        if token == "--tick" and index + 1 < len(tokens):
+            value = tokens[index + 1]
+            break
+    else:
+        return 50.0
+    try:
+        tick_kimg = float(value)
+    except ValueError:
+        fail(f"--tick must be numeric in exact_command, got {value!r}")
+    if not math.isfinite(tick_kimg) or tick_kimg <= 0:
+        fail(f"--tick must be positive in exact_command, got {value!r}")
+    return tick_kimg
+
+
+def _state_integer(state: dict, key: str, training_state: Path) -> int:
+    try:
+        value = int(state[key])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        fail(f"training-state {key} must be an integer: {training_state}")
+    return value
+
+
+def _state_optional_float(value, field: str, training_state: Path) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        fail(f"training-state {field} must be numeric: {training_state}")
+    if not math.isfinite(number):
+        fail(f"training-state {field} must be finite: {training_state}")
+    return number
+
+
+def validate_training_state_against_csv(
+    state: dict,
+    *,
+    training_state: Path,
+    last_csv_row: dict,
+    last_packaged_row: dict,
+    schedule: str,
+    exact_command: str,
+    global_batch: int,
+) -> None:
+    """Fail closed when the checkpoint does not describe the final CSV row."""
+    csv_nimg = int(float(last_csv_row["processed_nimg"]))
+    csv_attempted = int(float(last_csv_row["attempted_iteration"]))
+    csv_successful = int(float(last_csv_row["successful_optimizer_steps"]))
+    csv_elapsed = float(last_csv_row["elapsed_sec"])
+    expected_progress = {
+        "cur_nimg": csv_nimg,
+        "attempted_iteration": csv_attempted,
+        "successful_optimizer_steps": csv_successful,
+    }
+    for key, expected in expected_progress.items():
+        actual = _state_integer(state, key, training_state)
+        if actual != expected:
+            fail(
+                f"training-state {key} mismatch: state={actual} csv_last={expected} "
+                f"({training_state})"
+            )
+
+    state_elapsed = _state_optional_float(state["elapsed_sec"], "elapsed_sec", training_state)
+    if state_elapsed is None or not math.isclose(state_elapsed, csv_elapsed, rel_tol=0.0, abs_tol=1e-6):
+        fail(
+            f"training-state elapsed_sec mismatch: state={state_elapsed} csv_last={csv_elapsed} "
+            f"({training_state})"
+        )
+
+    # The training state stores the next-loop tick, while a summary row is
+    # recorded on the current tick. The final checkpoint is written at a
+    # maintenance boundary; derive that boundary from the recorded --tick.
+    tick_nimg = extract_tick_kimg_from_command(exact_command) * 1000
+    tick_span_nimg = math.ceil(tick_nimg / global_batch) * global_batch
+    expected_cur_tick = math.ceil(csv_nimg / tick_span_nimg)
+    actual_cur_tick = _state_integer(state, "cur_tick", training_state)
+    if actual_cur_tick != expected_cur_tick:
+        fail(
+            f"training-state cur_tick mismatch: state={actual_cur_tick} "
+            f"csv_last_expected={expected_cur_tick} ({training_state})"
+        )
+
+    if schedule != "adaptive_v1":
+        return
+    loss_fn_state = state.get("loss_fn_state")
+    if not isinstance(loss_fn_state, dict):
+        fail(f"adaptive training-state missing loss_fn_state: {training_state}")
+    if loss_fn_state.get("schedule_name") != schedule:
+        fail(
+            f"training-state schedule mismatch: state={loss_fn_state.get('schedule_name')!r} "
+            f"expected={schedule!r} ({training_state})"
+        )
+    controller_state = loss_fn_state.get("schedule")
+    if not isinstance(controller_state, dict):
+        fail(f"adaptive training-state missing loss_fn_state.schedule: {training_state}")
+
+    state_updates = _state_integer(controller_state, "signal_updates", training_state)
+    csv_updates = last_packaged_row["signal_updates"]
+    if state_updates != csv_updates:
+        fail(
+            f"training-state signal_updates mismatch: state={state_updates} "
+            f"csv_last={csv_updates} ({training_state})"
+        )
+    for field in ("loss_ema", "loss_reference"):
+        state_value = _state_optional_float(controller_state.get(field), field, training_state)
+        csv_value = last_packaged_row[field]
+        if (state_value is None) != (csv_value is None):
+            fail(
+                f"training-state {field} mismatch: state={state_value} "
+                f"csv_last={csv_value} ({training_state})"
+            )
+        if state_value is not None and not math.isclose(
+            # train_summary.csv writes controller floats with .12g precision.
+            state_value, csv_value, rel_tol=1e-11, abs_tol=1e-12
+        ):
+            fail(
+                f"training-state {field} mismatch: state={state_value} "
+                f"csv_last={csv_value} ({training_state})"
+            )
 
 
 def collect_runtime_metadata(run_meta: dict[str, str]) -> dict:
@@ -573,6 +767,12 @@ def main(argv: list[str] | None = None) -> None:
 
     attempted = len(packaged)
     successful = attempted - skipped
+    for expected_iteration, row in enumerate(packaged, start=1):
+        if row["attempted_iteration"] != expected_iteration:
+            fail(
+                "attempted_iteration sequence mismatch: "
+                f"csv={row['attempted_iteration']} expected={expected_iteration}"
+            )
     last_attempted = packaged[-1]["attempted_iteration"]
     last_successful = packaged[-1]["successful_optimizer_steps"]
     if last_attempted != attempted:
@@ -599,6 +799,11 @@ def main(argv: list[str] | None = None) -> None:
             f"(duration_mimg={args.duration_mimg}, batch={args.global_batch}, "
             f"expected_nimg={expected_nimg}) for mode={args.mode}"
         )
+
+    adaptive_runtime = adaptive_runtime_summary(packaged)
+    activation_gate_applied = args.mode == "activation" and args.schedule == "adaptive_v1"
+    if activation_gate_applied:
+        enforce_adaptive_activation_gate(adaptive_runtime, final_iteration=attempted)
 
     if args.log is not None and args.log.is_file():
         hits = [
@@ -628,6 +833,15 @@ def main(argv: list[str] | None = None) -> None:
         for key in ("cur_nimg", "cur_tick", "attempted_iteration", "successful_optimizer_steps", "elapsed_sec"):
             if key not in state:
                 fail(f"{key} missing in {training_state}")
+        validate_training_state_against_csv(
+            state,
+            training_state=training_state,
+            last_csv_row=rows[-1],
+            last_packaged_row=packaged[-1],
+            schedule=args.schedule,
+            exact_command=exact_command,
+            global_batch=args.global_batch,
+        )
         print(f"[collect_schedule_results] loaded training-state: {training_state}")
 
     wall_time = None
@@ -704,20 +918,9 @@ def main(argv: list[str] | None = None) -> None:
         "schedule_telemetry_total_rows": len(packaged),
         "schedule_telemetry_coverage": telemetry_rows / len(packaged),
         "first_schedule_telemetry_iteration": first_telemetry_iteration,
-        "final_signal_updates": next(
-            (
-                row["signal_updates"] for row in reversed(packaged)
-                if row["signal_updates"] is not None
-            ),
-            None,
-        ),
-        "first_nonzero_correction_iteration": next(
-            (
-                row["attempted_iteration"] for row in packaged
-                if row["correction"] is not None and row["correction"] != 0
-            ),
-            None,
-        ),
+        **adaptive_runtime,
+        "activation_gate_applied": activation_gate_applied,
+        "activation_gate_passed": True if activation_gate_applied else None,
         "duration_mimg": args.duration_mimg,
         "evidence_class": evidence_class,
         **runtime,

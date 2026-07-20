@@ -147,6 +147,102 @@ def write_minimal_run(
     (run_dir / "training-state-latest.pt").write_bytes(b"not-a-real-state")
 
 
+def write_collector_training_state(
+    run_dir: Path,
+    *,
+    schedule: str,
+    cur_nimg: int = 16_000,
+    attempted_iteration: int = 1,
+    successful_optimizer_steps: int = 1,
+    elapsed_sec: float = 1.0,
+) -> dict:
+    import torch
+
+    state = {
+        "gradscaler_state": {"scale": 65536.0},
+        "cur_nimg": cur_nimg,
+        "cur_tick": 1,
+        "attempted_iteration": attempted_iteration,
+        "successful_optimizer_steps": successful_optimizer_steps,
+        "elapsed_sec": elapsed_sec,
+        "loss_fn_state": {
+            "schedule_name": schedule,
+            "stage": 0,
+            "ratio": 0.5,
+            "schedule": {},
+        },
+    }
+    if schedule == "adaptive_v1":
+        state["loss_fn_state"]["schedule"] = {
+            "loss_ema": 0.8,
+            "loss_reference": 1.0,
+            "signal_updates": 3,
+        }
+    torch.save(state, run_dir / "training-state-latest.pt")
+    return state
+
+
+def write_adaptive_activation_run(
+    run_dir: Path,
+    *,
+    data_path: Path,
+    transfer_path: Path,
+    final_signal_updates: int = 8,
+    first_nonzero_correction_iteration: int | None = 12,
+    final_adaptive_active: bool = True,
+) -> None:
+    """Write a 32-iteration activation fixture with controller-state timing."""
+    write_minimal_run(
+        run_dir,
+        schedule="adaptive_v1",
+        mode="activation",
+        duration=0.004,
+        data_path=data_path,
+        transfer_path=transfer_path,
+        include_telemetry=True,
+    )
+    summary_path = run_dir / "train_summary.csv"
+    with summary_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames
+
+    rows = []
+    for iteration in range(1, 33):
+        signal_updates = min(iteration // 4, final_signal_updates)
+        correction_active = (
+            first_nonzero_correction_iteration is not None
+            and iteration >= first_nonzero_correction_iteration
+            and (iteration < 32 or final_adaptive_active)
+        )
+        adaptive_active = signal_updates >= 3 and (iteration < 32 or final_adaptive_active)
+        rows.append(
+            {
+                "attempted_iteration": iteration,
+                "successful_optimizer_steps": iteration,
+                "processed_nimg": iteration * 128,
+                "processed_kimg": f"{iteration * 0.128:.6f}",
+                "loss": "1.25",
+                "grad_scale": "65536",
+                "step_skipped": "0",
+                "schedule": "adaptive_v1",
+                "stage": "0",
+                "elapsed_sec": f"{iteration / 10:.1f}",
+                "peak_vram_gb": "1.5",
+                "loss_ema": "0.8" if signal_updates else "",
+                "loss_reference": "1.0" if signal_updates else "",
+                "correction": "0.02" if correction_active else "0",
+                "signal_updates": str(signal_updates),
+                "adaptive_active": str(int(adaptive_active)),
+                "r_over_t_mean": "0.75",
+                "gap_mean": "0.25",
+            }
+        )
+    with summary_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 class RunnerInfraTests(unittest.TestCase):
     def test_bash_syntax(self):
         subprocess.check_call(["bash", "-n", str(RUNNER)])
@@ -415,21 +511,25 @@ class CollectorInfraTests(unittest.TestCase):
         transfer: Path,
         *,
         schedule: str,
+        mode: str = "stability",
+        load_training_state: bool = False,
     ) -> subprocess.CompletedProcess:
+        command = [
+            sys.executable,
+            str(COLLECTOR),
+            "--run-dir", str(run_dir),
+            "--outdir", str(outdir),
+            "--data", str(data),
+            "--transfer", str(transfer),
+            "--mode", mode,
+            "--schedule", schedule,
+            "--allow-dirty",
+            "--skip-snapshot-load",
+        ]
+        if not load_training_state:
+            command.append("--skip-training-state-load")
         return subprocess.run(
-            [
-                sys.executable,
-                str(COLLECTOR),
-                "--run-dir", str(run_dir),
-                "--outdir", str(outdir),
-                "--data", str(data),
-                "--transfer", str(transfer),
-                "--mode", "stability",
-                "--schedule", schedule,
-                "--allow-dirty",
-                "--skip-snapshot-load",
-                "--skip-training-state-load",
-            ],
+            command,
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
@@ -476,6 +576,169 @@ class CollectorInfraTests(unittest.TestCase):
             self.assertTrue(metadata["schedule_telemetry_available"])
             self.assertEqual(metadata["final_signal_updates"], 3)
             self.assertEqual(metadata["first_nonzero_correction_iteration"], 1)
+
+    def test_training_state_must_match_final_csv_and_adaptive_telemetry(self):
+        cases = [
+            (
+                "cur_nimg",
+                lambda state: state.update(cur_nimg=15_872),
+                "training-state cur_nimg mismatch",
+            ),
+            (
+                "attempted_iteration",
+                lambda state: state.update(attempted_iteration=2),
+                "training-state attempted_iteration mismatch",
+            ),
+            (
+                "successful_optimizer_steps",
+                lambda state: state.update(successful_optimizer_steps=0),
+                "training-state successful_optimizer_steps mismatch",
+            ),
+            (
+                "elapsed_sec",
+                lambda state: state.update(elapsed_sec=2.0),
+                "training-state elapsed_sec mismatch",
+            ),
+            (
+                "cur_tick",
+                lambda state: state.update(cur_tick=2),
+                "training-state cur_tick mismatch",
+            ),
+            (
+                "signal_updates",
+                lambda state: state["loss_fn_state"]["schedule"].update(signal_updates=2),
+                "training-state signal_updates mismatch",
+            ),
+            (
+                "loss_ema",
+                lambda state: state["loss_fn_state"]["schedule"].update(loss_ema=0.7),
+                "training-state loss_ema mismatch",
+            ),
+            (
+                "loss_reference",
+                lambda state: state["loss_fn_state"]["schedule"].update(loss_reference=1.1),
+                "training-state loss_reference mismatch",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            data, transfer = self._assets(tmp_path)
+            for name, mutate, error in cases:
+                with self.subTest(name=name):
+                    run_dir = tmp_path / f"run-{name}"
+                    outdir = tmp_path / f"out-{name}"
+                    write_minimal_run(
+                        run_dir,
+                        schedule="adaptive_v1",
+                        data_path=data,
+                        transfer_path=transfer,
+                        include_telemetry=True,
+                    )
+                    state = write_collector_training_state(run_dir, schedule="adaptive_v1")
+                    mutate(state)
+                    import torch
+
+                    torch.save(state, run_dir / "training-state-latest.pt")
+                    completed = self._run_collector(
+                        run_dir,
+                        outdir,
+                        data,
+                        transfer,
+                        schedule="adaptive_v1",
+                        load_training_state=True,
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn(error, completed.stderr)
+
+    def test_matching_training_state_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            write_collector_training_state(run_dir, schedule="adaptive_v1")
+            completed = self._run_collector(
+                run_dir,
+                outdir,
+                data,
+                transfer,
+                schedule="adaptive_v1",
+                load_training_state=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_adaptive_activation_gate_records_controller_and_pair_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_adaptive_activation_run(
+                run_dir,
+                data_path=data,
+                transfer_path=transfer,
+            )
+            completed = self._run_collector(
+                run_dir, outdir, data, transfer,
+                schedule="adaptive_v1", mode="activation",
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            metadata = json.loads((outdir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["final_signal_updates"], 8)
+            self.assertTrue(metadata["final_adaptive_active"])
+            self.assertEqual(metadata["first_nonzero_correction_iteration"], 12)
+            self.assertEqual(metadata["first_adapted_pair_iteration"], 13)
+            self.assertTrue(metadata["activation_gate_applied"])
+            self.assertTrue(metadata["activation_gate_passed"])
+
+    def test_adaptive_activation_gate_rejects_nonactivated_or_late_controller(self):
+        cases = [
+            (
+                dict(final_signal_updates=2, first_nonzero_correction_iteration=None),
+                "final_signal_updates must be >= 3",
+            ),
+            (
+                dict(first_nonzero_correction_iteration=None),
+                "first_nonzero_correction_iteration is required",
+            ),
+            (
+                dict(final_adaptive_active=False),
+                "final adaptive_active must be true",
+            ),
+            (
+                dict(first_nonzero_correction_iteration=31),
+                "first_adapted_pair_iteration must be before final_iteration",
+            ),
+            (
+                dict(first_nonzero_correction_iteration=29),
+                "at least 4 attempted iterations",
+            ),
+        ]
+        for fixture_kwargs, expected_error in cases:
+            with self.subTest(fixture_kwargs=fixture_kwargs), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                run_dir = tmp_path / "run"
+                outdir = tmp_path / "out"
+                data, transfer = self._assets(tmp_path)
+                write_adaptive_activation_run(
+                    run_dir,
+                    data_path=data,
+                    transfer_path=transfer,
+                    **fixture_kwargs,
+                )
+                completed = self._run_collector(
+                    run_dir, outdir, data, transfer,
+                    schedule="adaptive_v1", mode="activation",
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(expected_error, completed.stderr)
 
     def test_adaptive_telemetry_rejects_invalid_types_and_ranges(self):
         cases = [
