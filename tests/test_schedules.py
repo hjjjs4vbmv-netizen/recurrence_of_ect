@@ -301,6 +301,36 @@ class ECMLossIntegrationTest(unittest.TestCase):
         self.assertEqual(metadata['max_adjust'], 0.04)
         self.assertEqual(metadata['min_gap'], 0.002)
 
+    def test_schedule_runtime_metrics_has_stable_contract(self):
+        required = {
+            'loss_ema', 'loss_reference', 'correction', 'signal_updates',
+            'adaptive_active', 'r_over_t_mean', 'gap_mean',
+        }
+        fixed = make_loss('sigmoid')
+        fixed_metrics = fixed.schedule_runtime_metrics()
+        self.assertEqual(set(fixed_metrics), required)
+        self.assertIsNone(fixed_metrics['loss_ema'])
+        self.assertFalse(fixed_metrics['adaptive_active'])
+
+        adaptive = make_loss('adaptive_v1', adaptive_loss_ema_beta=0.0,
+                             adaptive_warmup_updates=2)
+        for loss in [10.0, 5.0, 2.5]:
+            adaptive.update_training_signal(loss)
+        adaptive_metrics = adaptive.schedule_runtime_metrics()
+        self.assertEqual(set(adaptive_metrics), required)
+        self.assertEqual(adaptive_metrics['signal_updates'], 3)
+        self.assertTrue(adaptive_metrics['adaptive_active'])
+        self.assertGreater(adaptive_metrics['correction'], 0)
+
+    def test_schedule_runtime_pair_means_match_realized_t_and_r(self):
+        loss_fn = make_loss('sigmoid')
+        t = torch.tensor([1.0, 2.0], dtype=torch.float64)
+        r = torch.tensor([0.5, 1.5], dtype=torch.float64)
+        loss_fn._record_schedule_runtime_pair(t=t, r=r)
+        metrics = loss_fn.schedule_runtime_metrics()
+        self.assertEqual(metrics['r_over_t_mean'], 0.625)
+        self.assertEqual(metrics['gap_mean'], 0.375)
+
     def test_unknown_adj_still_raises_value_error(self):
         with self.assertRaises(ValueError):
             make_loss('cosine')

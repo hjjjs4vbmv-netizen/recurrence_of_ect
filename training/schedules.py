@@ -92,6 +92,16 @@ class Schedule:
         del loss
         return False
 
+    def runtime_metrics(self):
+        """Stable controller telemetry contract for training/evaluation code."""
+        return {
+            'loss_ema': None,
+            'loss_reference': None,
+            'correction': 0.0,
+            'signal_updates': 0,
+            'adaptive_active': False,
+        }
+
     def state_dict(self):
         return {}
 
@@ -286,10 +296,16 @@ class AdaptiveV1Schedule(SigmoidSchedule):
             'warmup_updates': self.warmup_updates,
             'max_adjust': self.max_adjust,
             'min_gap': self.min_gap,
+            **self.runtime_metrics(),
+        }
+
+    def runtime_metrics(self):
+        return {
             'loss_ema': self.loss_ema,
             'loss_reference': self.loss_reference,
-            'signal_updates': self.signal_updates,
             'correction': self.correction(),
+            'signal_updates': self.signal_updates,
+            'adaptive_active': self.correction_is_active(),
         }
 
 def continuous_stage(cur_tick, double_ticks):

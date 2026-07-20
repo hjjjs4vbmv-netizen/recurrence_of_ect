@@ -41,6 +41,8 @@ class ECMLoss:
         self.b = b
 
         self.c = c
+        self._runtime_r_over_t_mean = float('nan')
+        self._runtime_gap_mean = float('nan')
         dist.print0(f'P_mean: {self.P_mean}, P_std: {self.P_std}, q: {self.q}, k {self.k}, b {self.b}, c: {self.c}')
 
     def update_schedule(self, stage):
@@ -73,6 +75,31 @@ class ECMLoss:
         metadata.update(stage=self.stage, ratio=self.ratio)
         return metadata
 
+    def schedule_runtime_metrics(self):
+        """Return stable, scalar telemetry without exposing schedule internals."""
+        metrics = self.schedule.runtime_metrics()
+        return {
+            'loss_ema': metrics['loss_ema'],
+            'loss_reference': metrics['loss_reference'],
+            'correction': float(metrics['correction']),
+            'signal_updates': int(metrics['signal_updates']),
+            'adaptive_active': bool(metrics['adaptive_active']),
+            'r_over_t_mean': float(self._runtime_r_over_t_mean),
+            'gap_mean': float(self._runtime_gap_mean),
+        }
+
+    def _record_schedule_runtime_pair(self, t, r):
+        with torch.no_grad():
+            valid = torch.isfinite(t) & torch.isfinite(r) & (t > 0)
+            if not bool(valid.any()):
+                self._runtime_r_over_t_mean = float('nan')
+                self._runtime_gap_mean = float('nan')
+                return
+            valid_t = t[valid].to(torch.float64)
+            valid_r = r[valid].to(torch.float64)
+            self._runtime_r_over_t_mean = float((valid_r / valid_t).mean().cpu())
+            self._runtime_gap_mean = float(((valid_t - valid_r) / valid_t).mean().cpu())
+
     # Official fixed t->r formulas, kept verbatim as the parity reference for
     # tests/test_schedules.py; the training path dispatches through
     # self.schedule (see __call__).
@@ -94,6 +121,7 @@ class ECMLoss:
         rnd_normal = torch.randn([images.shape[0], 1, 1, 1], device=images.device)
         t = (rnd_normal * self.P_std + self.P_mean).exp()
         r = self.schedule.compute_r(t=t, stage=self.stage)
+        self._record_schedule_runtime_pair(t=t, r=r)
 
         # Augmentation if needed
         y, augment_labels = augment_pipe(images) if augment_pipe is not None else (images, None)

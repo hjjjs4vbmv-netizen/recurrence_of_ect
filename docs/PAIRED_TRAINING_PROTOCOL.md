@@ -94,6 +94,9 @@ attempted iteration:
 - `step_skipped`
 - `schedule`
 - `stage`
+- `loss_ema` / `loss_reference`
+- `correction` / `signal_updates` / `adaptive_active`
+- `r_over_t_mean` / `gap_mean`
 - `elapsed_sec`
 - `peak_vram_gb`
 
@@ -102,7 +105,9 @@ Counters and exact progress (`cur_nimg`, next-loop `cur_tick`,
 Fresh runs refuse to append an existing non-empty CSV; legal resumes append only
 after validating the last row against restored counters / `cur_nimg` / schedule.
 
-Adaptive-only fields (`loss_ema`, `correction`, …) are reserved for Role C.
+Schedule telemetry is obtained through the stable
+`loss_fn.schedule_runtime_metrics()` interface; the training loop and result
+collector do not inspect schedule implementation fields.
 
 ## Collector
 

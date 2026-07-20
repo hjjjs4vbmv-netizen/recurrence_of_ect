@@ -22,6 +22,16 @@ import sys
 from pathlib import Path
 
 
+TELEMETRY_FIELDS = (
+    "loss_ema",
+    "loss_reference",
+    "correction",
+    "signal_updates",
+    "adaptive_active",
+    "r_over_t_mean",
+    "gap_mean",
+)
+
 OUTPUT_FIELDS = (
     "attempted_iteration",
     "successful_optimizer_steps",
@@ -31,6 +41,7 @@ OUTPUT_FIELDS = (
     "step_skipped",
     "schedule",
     "stage",
+    *TELEMETRY_FIELDS,
     "seconds",
     "peak_vram_mib",
 )
@@ -134,6 +145,11 @@ def sha256_file(path: Path | None) -> str | None:
 
 def parse_boolish(value: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def parse_optional_float(value: str | None) -> float | None:
+    text = "" if value is None else str(value).strip()
+    return None if text == "" else float(text)
 
 
 def load_rows(path: Path) -> list[dict]:
@@ -394,6 +410,9 @@ def main(argv: list[str] | None = None) -> None:
     csv_schedule = next(iter(schedules))
     if csv_schedule != args.schedule:
         fail(f"CSV schedule={csv_schedule!r} != --schedule={args.schedule!r}")
+    telemetry_available = all(field in rows[0] for field in TELEMETRY_FIELDS)
+    if args.schedule == "adaptive_v1" and not telemetry_available:
+        fail("adaptive_v1 train_summary.csv missing stable schedule telemetry columns")
 
     exact_command = extract_exact_command(command_meta, args.log, args.exact_command_file)
     cmd_schedule = extract_mapping_from_command(exact_command)
@@ -413,6 +432,7 @@ def main(argv: list[str] | None = None) -> None:
     packaged: list[dict] = []
     nan_count = 0
     inf_count = 0
+    previous_signal_updates = 0
 
     for row in rows:
         loss = float(row["loss"])
@@ -428,6 +448,45 @@ def main(argv: list[str] | None = None) -> None:
         grad_scale = float(row["grad_scale"])
         losses.append(loss)
         grad_scales.append(grad_scale)
+        telemetry = {
+            "loss_ema": None,
+            "loss_reference": None,
+            "correction": None,
+            "signal_updates": None,
+            "adaptive_active": None,
+            "r_over_t_mean": None,
+            "gap_mean": None,
+        }
+        if telemetry_available:
+            telemetry.update(
+                loss_ema=parse_optional_float(row["loss_ema"]),
+                loss_reference=parse_optional_float(row["loss_reference"]),
+                correction=float(row["correction"]),
+                signal_updates=int(float(row["signal_updates"])),
+                adaptive_active=parse_boolish(row["adaptive_active"]),
+                r_over_t_mean=float(row["r_over_t_mean"]),
+                gap_mean=float(row["gap_mean"]),
+            )
+            finite_values = [
+                telemetry["correction"], telemetry["r_over_t_mean"], telemetry["gap_mean"]
+            ]
+            finite_values += [
+                value for value in (telemetry["loss_ema"], telemetry["loss_reference"])
+                if value is not None
+            ]
+            if not all(math.isfinite(value) for value in finite_values):
+                fail(f"non-finite schedule telemetry at attempted_iteration={row['attempted_iteration']}")
+            if telemetry["signal_updates"] < previous_signal_updates:
+                fail("schedule signal_updates is not monotonic")
+            previous_signal_updates = telemetry["signal_updates"]
+            if not math.isclose(
+                telemetry["r_over_t_mean"] + telemetry["gap_mean"],
+                1.0,
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            ):
+                fail(f"r_over_t_mean + gap_mean != 1 at attempted_iteration={row['attempted_iteration']}")
+
         packaged.append(
             {
                 "attempted_iteration": int(float(row["attempted_iteration"])),
@@ -438,6 +497,7 @@ def main(argv: list[str] | None = None) -> None:
                 "step_skipped": "true" if step_skipped else "false",
                 "schedule": row.get("schedule", args.schedule),
                 "stage": row.get("stage", ""),
+                **telemetry,
                 "seconds": float(row["elapsed_sec"]),
                 "peak_vram_mib": peak_gb * 1024.0,
             }
@@ -570,6 +630,15 @@ def main(argv: list[str] | None = None) -> None:
         "metrics_enabled": False,
         "mode": args.mode,
         "schedule": args.schedule,
+        "schedule_telemetry_available": telemetry_available,
+        "final_signal_updates": packaged[-1]["signal_updates"],
+        "first_nonzero_correction_iteration": next(
+            (
+                row["attempted_iteration"] for row in packaged
+                if row["correction"] is not None and row["correction"] != 0
+            ),
+            None,
+        ),
         "duration_mimg": args.duration_mimg,
         "evidence_class": evidence_class,
         **runtime,
@@ -594,6 +663,13 @@ def main(argv: list[str] | None = None) -> None:
                     "step_skipped": row["step_skipped"],
                     "schedule": row["schedule"],
                     "stage": row["stage"],
+                    "loss_ema": "" if row["loss_ema"] is None else f"{row['loss_ema']:.12g}",
+                    "loss_reference": "" if row["loss_reference"] is None else f"{row['loss_reference']:.12g}",
+                    "correction": "" if row["correction"] is None else f"{row['correction']:.12g}",
+                    "signal_updates": "" if row["signal_updates"] is None else row["signal_updates"],
+                    "adaptive_active": "" if row["adaptive_active"] is None else int(row["adaptive_active"]),
+                    "r_over_t_mean": "" if row["r_over_t_mean"] is None else f"{row['r_over_t_mean']:.12g}",
+                    "gap_mean": "" if row["gap_mean"] is None else f"{row['gap_mean']:.12g}",
                     "seconds": f"{row['seconds']:.6f}",
                     "peak_vram_mib": f"{row['peak_vram_mib']:.6f}",
                 }

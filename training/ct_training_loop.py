@@ -18,8 +18,7 @@ from torch_utils import misc
 from metrics import metric_main
 
 # Per-attempted-iteration CSV for paired fixed/adaptive comparisons.
-# schedule / stage are recorded every row so collectors do not scrape logs.
-# Adaptive-only columns (loss_ema, correction, ...) are added by Role C later.
+# Schedule telemetry comes exclusively from loss_fn.schedule_runtime_metrics().
 _TRAIN_SUMMARY_FIELDS = (
     'attempted_iteration',
     'successful_optimizer_steps',
@@ -30,6 +29,13 @@ _TRAIN_SUMMARY_FIELDS = (
     'step_skipped',
     'schedule',
     'stage',
+    'loss_ema',
+    'loss_reference',
+    'correction',
+    'signal_updates',
+    'adaptive_active',
+    'r_over_t_mean',
+    'gap_mean',
     'elapsed_sec',
     'peak_vram_gb',
 )
@@ -86,6 +92,27 @@ def globally_average_adaptive_loss(loss_sum, loss_count, device):
         torch.distributed.all_reduce(totals)
     total_count = float(totals[1])
     return float(totals[0] / total_count) if total_count > 0 else float('nan')
+
+
+def globally_average_runtime_pairs(metric_batches, device):
+    """Average public r/t telemetry across accumulation rounds and ranks."""
+    r_values = [float(metrics['r_over_t_mean']) for metrics in metric_batches]
+    gap_values = [float(metrics['gap_mean']) for metrics in metric_batches]
+    r_values = [value for value in r_values if math.isfinite(value)]
+    gap_values = [value for value in gap_values if math.isfinite(value)]
+    totals = torch.tensor(
+        [sum(r_values), len(r_values), sum(gap_values), len(gap_values)],
+        dtype=torch.float64,
+        device=device,
+    )
+    if dist.get_world_size() > 1:
+        torch.distributed.all_reduce(totals)
+    r_count = float(totals[1])
+    gap_count = float(totals[3])
+    return {
+        'r_over_t_mean': float(totals[0] / r_count) if r_count > 0 else float('nan'),
+        'gap_mean': float(totals[2] / gap_count) if gap_count > 0 else float('nan'),
+    }
 
 
 #----------------------------------------------------------------------------
@@ -371,7 +398,12 @@ def training_loop(
         if resume_state_dump:
             if summary_exists:
                 with open(summary_path, 'rt', newline='') as handle:
-                    rows = list(csv.DictReader(handle))
+                    reader = csv.DictReader(handle)
+                    if tuple(reader.fieldnames or ()) != _TRAIN_SUMMARY_FIELDS:
+                        raise RuntimeError(
+                            f'resume requested but {summary_path} telemetry schema does not match current code'
+                        )
+                    rows = list(reader)
                 if not rows:
                     raise RuntimeError(f'resume requested but {summary_path} has no data rows')
                 last = rows[-1]
@@ -460,6 +492,7 @@ def training_loop(
         # Accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
         loss_batches = []
+        schedule_metric_batches = []
         for round_idx in range(num_accumulation_rounds):
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
                 images, labels = next(dataset_iterator)
@@ -468,6 +501,7 @@ def training_loop(
 
                 loss = loss_fn(net=ddp, images=images, labels=labels, augment_pipe=augment_pipe)
                 loss_batches.append(loss.detach())
+                schedule_metric_batches.append(loss_fn.schedule_runtime_metrics())
                 training_stats.report('Loss/loss', loss)
                 if enable_amp:
                     scaler.scale(loss.mean()).backward()
@@ -511,6 +545,7 @@ def training_loop(
         loss_count = sum(x.numel() for x in loss_batches)
         loss_sum = sum(float(x.sum().cpu()) for x in loss_batches)
         loss_mean = loss_sum / loss_count
+        runtime_pair_metrics = globally_average_runtime_pairs(schedule_metric_batches, device=device)
         elapsed_sec = elapsed_base_sec + (time.time() - start_time)
         peak_vram_gb = torch.cuda.max_memory_allocated(device) / 2**30
         training_stats.report0('Progress/grad_scale', grad_scale)
@@ -537,10 +572,20 @@ def training_loop(
             signal_window = adaptive_signal_window.pop_if_due(cur_nimg)
             if signal_window is not None:
                 signal_loss = globally_average_adaptive_loss(*signal_window, device=device)
-                if loss_fn.update_training_signal(signal_loss):
-                    schedule_info = loss_fn.schedule_metadata()
-                    training_stats.report('Adaptive/loss_ema', schedule_info['loss_ema'])
-                    training_stats.report('Adaptive/ratio_correction', schedule_info['correction'])
+                loss_fn.update_training_signal(signal_loss)
+
+        schedule_runtime_metrics = loss_fn.schedule_runtime_metrics()
+        schedule_runtime_metrics.update(runtime_pair_metrics)
+        if schedule_runtime_metrics['loss_ema'] is not None:
+            training_stats.report0('Schedule/loss_ema', schedule_runtime_metrics['loss_ema'])
+        if schedule_runtime_metrics['loss_reference'] is not None:
+            training_stats.report0('Schedule/loss_reference', schedule_runtime_metrics['loss_reference'])
+        training_stats.report0('Schedule/correction', schedule_runtime_metrics['correction'])
+        training_stats.report0('Schedule/signal_updates', schedule_runtime_metrics['signal_updates'])
+        training_stats.report0('Schedule/adaptive_active', int(schedule_runtime_metrics['adaptive_active']))
+        training_stats.report0('Schedule/r_over_t_mean', schedule_runtime_metrics['r_over_t_mean'])
+        training_stats.report0('Schedule/gap_mean', schedule_runtime_metrics['gap_mean'])
+
         if train_summary_writer is not None:
             train_summary_writer.writerow({
                 'attempted_iteration': attempted_iteration,
@@ -552,6 +597,13 @@ def training_loop(
                 'step_skipped': step_skipped,
                 'schedule': schedule_name,
                 'stage': stage,
+                'loss_ema': '' if schedule_runtime_metrics['loss_ema'] is None else f"{schedule_runtime_metrics['loss_ema']:.12g}",
+                'loss_reference': '' if schedule_runtime_metrics['loss_reference'] is None else f"{schedule_runtime_metrics['loss_reference']:.12g}",
+                'correction': f"{schedule_runtime_metrics['correction']:.12g}",
+                'signal_updates': schedule_runtime_metrics['signal_updates'],
+                'adaptive_active': int(schedule_runtime_metrics['adaptive_active']),
+                'r_over_t_mean': f"{schedule_runtime_metrics['r_over_t_mean']:.12g}",
+                'gap_mean': f"{schedule_runtime_metrics['gap_mean']:.12g}",
                 'elapsed_sec': f'{elapsed_sec:.6f}',
                 'peak_vram_gb': f'{peak_vram_gb:.6f}',
             })

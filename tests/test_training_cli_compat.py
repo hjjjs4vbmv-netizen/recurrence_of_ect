@@ -2,6 +2,7 @@ import contextlib
 import io
 import unittest
 
+import click
 import dnnlib
 import torch
 from click.testing import CliRunner
@@ -30,6 +31,12 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
     def test_legacy_mapping_option_is_preserved(self):
         self.assertEqual(parse_train_args('--mapping=const')['mapping'], 'const')
         self.assertEqual(parse_train_args('--mapping=sigmoid')['mapping'], 'sigmoid')
+
+    def test_q_requires_a_value_strictly_greater_than_one(self):
+        for value in ['1', '0', '-2']:
+            with self.subTest(value=value), self.assertRaises(click.BadParameter):
+                parse_train_args('-q', value)
+        self.assertEqual(parse_train_args('-q', '1.01')['q'], 1.01)
 
     def test_schedule_and_mapping_are_equivalent_names(self):
         for schedule in ['const', 'sigmoid', 'adaptive_v1']:

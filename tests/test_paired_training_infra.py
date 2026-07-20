@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import subprocess
 import sys
@@ -34,6 +35,7 @@ def write_minimal_run(
     git_head: str | None = None,
     data_path: Path | None = None,
     transfer_path: Path | None = None,
+    include_telemetry: bool = False,
 ) -> None:
     import hashlib
     import math
@@ -90,9 +92,7 @@ def write_minimal_run(
     nimg = int(round(kimg * 1000))
     loss = "nan" if include_nan else "1.25"
     with (run_dir / "train_summary.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
+        fieldnames = [
                 "attempted_iteration",
                 "successful_optimizer_steps",
                 "processed_nimg",
@@ -104,11 +104,20 @@ def write_minimal_run(
                 "stage",
                 "elapsed_sec",
                 "peak_vram_gb",
-            ],
-        )
+            ]
+        if include_telemetry:
+            fieldnames += [
+                "loss_ema",
+                "loss_reference",
+                "correction",
+                "signal_updates",
+                "adaptive_active",
+                "r_over_t_mean",
+                "gap_mean",
+            ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerow(
-            {
+        row = {
                 "attempted_iteration": 1,
                 "successful_optimizer_steps": 1,
                 "processed_nimg": nimg,
@@ -121,7 +130,17 @@ def write_minimal_run(
                 "elapsed_sec": "1.0",
                 "peak_vram_gb": "1.5",
             }
-        )
+        if include_telemetry:
+            row.update(
+                loss_ema="0.8",
+                loss_reference="1.0",
+                correction="0.02",
+                signal_updates="3",
+                adaptive_active="1",
+                r_over_t_mean="0.75",
+                gap_mean="0.25",
+            )
+        writer.writerow(row)
 
     (run_dir / "network-snapshot-latest.pkl").write_bytes(b"not-a-real-pickle")
     # Minimal torch-free stand-in; collector tests skip torch.load via flag.
@@ -387,6 +406,48 @@ class CollectorInfraTests(unittest.TestCase):
         write_dummy_asset(data, b"dataset")
         write_dummy_asset(transfer, b"transfer")
         return data, transfer
+
+    def test_adaptive_telemetry_is_validated_and_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLLECTOR),
+                    "--run-dir", str(run_dir),
+                    "--outdir", str(outdir),
+                    "--data", str(data),
+                    "--transfer", str(transfer),
+                    "--mode", "stability",
+                    "--schedule", "adaptive_v1",
+                    "--allow-dirty",
+                    "--skip-snapshot-load",
+                    "--skip-training-state-load",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            with (outdir / "train_summary.csv").open(newline="", encoding="utf-8") as handle:
+                packaged = next(csv.DictReader(handle))
+            self.assertEqual(packaged["signal_updates"], "3")
+            self.assertEqual(packaged["adaptive_active"], "1")
+            self.assertEqual(packaged["r_over_t_mean"], "0.75")
+            metadata = json.loads((outdir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertTrue(metadata["schedule_telemetry_available"])
+            self.assertEqual(metadata["final_signal_updates"], 3)
+            self.assertEqual(metadata["first_nonzero_correction_iteration"], 1)
 
     def test_missing_csv_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

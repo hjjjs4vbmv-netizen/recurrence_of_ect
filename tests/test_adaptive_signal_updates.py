@@ -1,6 +1,12 @@
 import unittest
 
-from training.ct_training_loop import AdaptiveSignalWindow, adaptive_update_interval_nimg
+import torch
+
+from training.ct_training_loop import (
+    AdaptiveSignalWindow,
+    adaptive_update_interval_nimg,
+    globally_average_runtime_pairs,
+)
 from training.schedules import get_schedule
 
 
@@ -29,6 +35,17 @@ class AdaptiveSignalUpdatesTest(unittest.TestCase):
         for value in [0, -0.5, 0.0005, float('inf')]:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 adaptive_update_interval_nimg(value)
+
+    def test_runtime_pair_metrics_average_without_schedule_internals(self):
+        metrics = globally_average_runtime_pairs(
+            [
+                {'r_over_t_mean': 0.6, 'gap_mean': 0.4},
+                {'r_over_t_mean': 0.8, 'gap_mean': 0.2},
+            ],
+            device=torch.device('cpu'),
+        )
+        self.assertAlmostEqual(metrics['r_over_t_mean'], 0.7)
+        self.assertAlmostEqual(metrics['gap_mean'], 0.3)
 
     def test_activation_budget_reaches_nonzero_correction_with_iterations_left(self):
         batch_size = 128
