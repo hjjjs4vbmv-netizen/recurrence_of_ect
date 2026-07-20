@@ -2,10 +2,12 @@ import os
 import csv
 import time
 import copy
+import filecmp
 import json
 import math
 import pickle
 import psutil
+import shutil
 import functools
 import PIL.Image
 import numpy as np
@@ -19,6 +21,20 @@ from metrics import metric_main
 
 # Per-attempted-iteration CSV for paired fixed/adaptive comparisons.
 # Schedule telemetry comes exclusively from loss_fn.schedule_runtime_metrics().
+_LEGACY_TRAIN_SUMMARY_FIELDS = (
+    'attempted_iteration',
+    'successful_optimizer_steps',
+    'processed_nimg',
+    'processed_kimg',
+    'loss',
+    'grad_scale',
+    'step_skipped',
+    'schedule',
+    'stage',
+    'elapsed_sec',
+    'peak_vram_gb',
+)
+
 _TRAIN_SUMMARY_FIELDS = (
     'attempted_iteration',
     'successful_optimizer_steps',
@@ -39,6 +55,58 @@ _TRAIN_SUMMARY_FIELDS = (
     'elapsed_sec',
     'peak_vram_gb',
 )
+
+#----------------------------------------------------------------------------
+
+def load_and_migrate_train_summary(summary_path):
+    """Load a resume CSV, upgrading only the known pre-telemetry schema.
+
+    Historical controller telemetry cannot be reconstructed, so migrated rows
+    deliberately contain empty telemetry cells. The original file is retained
+    beside the upgraded CSV for auditability.
+    """
+    with open(summary_path, 'rt', newline='') as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = tuple(reader.fieldnames or ())
+        rows = list(reader)
+
+    if not rows:
+        raise RuntimeError(f'resume requested but {summary_path} has no data rows')
+    if fieldnames == _TRAIN_SUMMARY_FIELDS:
+        return rows, None
+    if fieldnames != _LEGACY_TRAIN_SUMMARY_FIELDS:
+        raise RuntimeError(
+            f'resume requested but {summary_path} has an unsupported schema; '
+            'expected the current telemetry schema or the exact legacy schema'
+        )
+
+    backup_path = f'{summary_path}.pre-telemetry.bak'
+    if os.path.exists(backup_path):
+        if not filecmp.cmp(summary_path, backup_path, shallow=False):
+            raise RuntimeError(
+                f'refuse to overwrite non-matching train-summary backup: {backup_path}'
+            )
+    else:
+        shutil.copy2(summary_path, backup_path)
+
+    migrated_rows = [
+        {field: row.get(field, '') for field in _TRAIN_SUMMARY_FIELDS}
+        for row in rows
+    ]
+    temporary_path = f'{summary_path}.telemetry-migration.tmp-{os.getpid()}'
+    try:
+        with open(temporary_path, 'wt', newline='') as handle:
+            writer = csv.DictWriter(handle, fieldnames=_TRAIN_SUMMARY_FIELDS)
+            writer.writeheader()
+            writer.writerows(migrated_rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, summary_path)
+    except BaseException:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+        raise
+    return migrated_rows, backup_path
 
 #----------------------------------------------------------------------------
 
@@ -397,15 +465,12 @@ def training_loop(
         summary_exists = os.path.isfile(summary_path) and os.path.getsize(summary_path) > 0
         if resume_state_dump:
             if summary_exists:
-                with open(summary_path, 'rt', newline='') as handle:
-                    reader = csv.DictReader(handle)
-                    if tuple(reader.fieldnames or ()) != _TRAIN_SUMMARY_FIELDS:
-                        raise RuntimeError(
-                            f'resume requested but {summary_path} telemetry schema does not match current code'
-                        )
-                    rows = list(reader)
-                if not rows:
-                    raise RuntimeError(f'resume requested but {summary_path} has no data rows')
+                rows, migrated_backup = load_and_migrate_train_summary(summary_path)
+                if migrated_backup is not None:
+                    dist.print0(
+                        f'Migrated legacy train_summary.csv to telemetry schema; '
+                        f'original saved as "{migrated_backup}"'
+                    )
                 last = rows[-1]
                 last_attempted = int(float(last['attempted_iteration']))
                 last_nimg = int(float(last.get('processed_nimg', last.get('nimg', -1))))

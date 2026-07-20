@@ -1,11 +1,17 @@
+import csv
+import tempfile
 import unittest
+from pathlib import Path
 
 import torch
 
 from training.ct_training_loop import (
     AdaptiveSignalWindow,
+    _LEGACY_TRAIN_SUMMARY_FIELDS,
+    _TRAIN_SUMMARY_FIELDS,
     adaptive_update_interval_nimg,
     globally_average_runtime_pairs,
+    load_and_migrate_train_summary,
 )
 from training.schedules import get_schedule
 
@@ -46,6 +52,58 @@ class AdaptiveSignalUpdatesTest(unittest.TestCase):
         )
         self.assertAlmostEqual(metrics['r_over_t_mean'], 0.7)
         self.assertAlmostEqual(metrics['gap_mean'], 0.3)
+
+    def test_resume_migrates_only_exact_legacy_summary_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_path = Path(tmp) / 'train_summary.csv'
+            legacy_row = {
+                'attempted_iteration': '4',
+                'successful_optimizer_steps': '4',
+                'processed_nimg': '512',
+                'processed_kimg': '0.512',
+                'loss': '1.25',
+                'grad_scale': '65536',
+                'step_skipped': '0',
+                'schedule': 'adaptive_v1',
+                'stage': '0',
+                'elapsed_sec': '2.0',
+                'peak_vram_gb': '1.5',
+            }
+            with summary_path.open('w', newline='') as handle:
+                writer = csv.DictWriter(handle, fieldnames=_LEGACY_TRAIN_SUMMARY_FIELDS)
+                writer.writeheader()
+                writer.writerow(legacy_row)
+
+            rows, backup_path = load_and_migrate_train_summary(summary_path)
+            self.assertEqual(backup_path, f'{summary_path}.pre-telemetry.bak')
+            self.assertTrue(Path(backup_path).is_file())
+            with Path(backup_path).open(newline='') as handle:
+                self.assertEqual(tuple(csv.DictReader(handle).fieldnames), _LEGACY_TRAIN_SUMMARY_FIELDS)
+            with summary_path.open(newline='') as handle:
+                reader = csv.DictReader(handle)
+                migrated = next(reader)
+                self.assertEqual(tuple(reader.fieldnames), _TRAIN_SUMMARY_FIELDS)
+            for field in (
+                'loss_ema', 'loss_reference', 'correction', 'signal_updates',
+                'adaptive_active', 'r_over_t_mean', 'gap_mean',
+            ):
+                self.assertEqual(migrated[field], '')
+                self.assertEqual(rows[0][field], '')
+
+            current_rows, second_backup = load_and_migrate_train_summary(summary_path)
+            self.assertIsNone(second_backup)
+            self.assertEqual(current_rows, rows)
+
+    def test_resume_rejects_unknown_summary_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_path = Path(tmp) / 'train_summary.csv'
+            with summary_path.open('w', newline='') as handle:
+                writer = csv.DictWriter(handle, fieldnames=('attempted_iteration', 'loss'))
+                writer.writeheader()
+                writer.writerow({'attempted_iteration': '1', 'loss': '1.0'})
+            with self.assertRaisesRegex(RuntimeError, 'unsupported schema'):
+                load_and_migrate_train_summary(summary_path)
+            self.assertFalse(Path(f'{summary_path}.pre-telemetry.bak').exists())
 
     def test_activation_budget_reaches_nonzero_correction_with_iterations_left(self):
         batch_size = 128

@@ -104,6 +104,10 @@ Counters and exact progress (`cur_nimg`, next-loop `cur_tick`,
 `tick_start_nimg`) are stored in `training-state-*.pt` and restored on resume.
 Fresh runs refuse to append an existing non-empty CSV; legal resumes append only
 after validating the last row against restored counters / `cur_nimg` / schedule.
+When resuming a run with the exact pre-telemetry 11-column schema, the training
+loop saves `train_summary.csv.pre-telemetry.bak` and atomically upgrades the CSV
+to the current schema. Historical telemetry cells stay empty because controller
+state cannot be reconstructed. Unknown or partial schemas remain hard errors.
 
 Schedule telemetry is obtained through the stable
 `loss_fn.schedule_runtime_metrics()` interface; the training loop and result
@@ -122,6 +126,12 @@ python scripts/collect_schedule_results.py \
 ```
 
 `scripts/collect_fixed_baseline_results.py` remains a compatibility wrapper.
+
+The collector strictly validates populated telemetry types, finiteness, ranges,
+controller-state consistency, and monotonic `signal_updates`. A migrated empty
+historical prefix is permitted, but an empty row after telemetry begins is not.
+`metadata.json` records telemetry row count, total row count, coverage, and the
+first iteration with telemetry so partial historical coverage is auditable.
 
 Automatically records train-time HEAD from `run_meta.env`, packaging-time HEAD,
 dirty status, exact command, asset SHA256 digests, and runtime metadata.
