@@ -79,7 +79,7 @@ Rules:
 5. Resume requires explicit `--resume` and must not pass `--transfer`.
 6. Resume refuses mixed schedules (meta / dirname arm mismatch) **and** requires the
    same clean `git_head` / dataset / transfer SHA as the immutable fresh `run_meta.env`.
-7. Progress (`cur_nimg`, next-loop `cur_tick`, counters, `elapsed_sec`) is restored from training-state contents.
+7. Progress (`cur_nimg`, next-loop `cur_tick`, counters, `elapsed_sec`) is restored from training-state contents. Adaptive runs also restore the next signal boundary and any partial loss sum/count, so resuming between signal boundaries is equivalent to uninterrupted training.
 
 ## Telemetry
 

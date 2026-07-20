@@ -152,6 +152,87 @@ class AdaptiveSignalWindow:
             self.next_update_nimg += self.update_nimg
         return loss_sum, loss_count
 
+    def state_dict(self):
+        """Return all state needed to resume a partially accumulated window."""
+        return {
+            'update_nimg': self.update_nimg,
+            'next_update_nimg': self.next_update_nimg,
+            'loss_sum': self.loss_sum,
+            'loss_count': self.loss_count,
+        }
+
+    def load_state_dict(self, state):
+        """Restore a window checkpointed after an arbitrary training step."""
+        if not isinstance(state, dict):
+            raise ValueError('adaptive signal window state must be a dict')
+        required = ('update_nimg', 'next_update_nimg', 'loss_sum', 'loss_count')
+        missing = [name for name in required if name not in state]
+        if missing:
+            raise ValueError(
+                f'adaptive signal window state missing required fields: {", ".join(missing)}'
+            )
+        update_nimg = int(state['update_nimg'])
+        next_update_nimg = int(state['next_update_nimg'])
+        loss_sum = float(state['loss_sum'])
+        loss_count = int(state['loss_count'])
+        if update_nimg != self.update_nimg:
+            raise ValueError(
+                f'adaptive signal window interval mismatch: checkpoint={update_nimg}, '
+                f'current={self.update_nimg}'
+            )
+        if next_update_nimg <= 0 or next_update_nimg % self.update_nimg != 0:
+            raise ValueError(
+                f'invalid adaptive signal window next_update_nimg: {next_update_nimg}'
+            )
+        if loss_count < 0:
+            raise ValueError(f'adaptive signal window loss_count must be non-negative, got {loss_count}')
+        self.next_update_nimg = next_update_nimg
+        self.loss_sum = loss_sum
+        self.loss_count = loss_count
+
+
+def gather_adaptive_signal_window_state(window, device):
+    """Collect each rank's local adaptive-window state for a rank-0 checkpoint."""
+    local_state = window.state_dict()
+    world_size = dist.get_world_size()
+    if world_size == 1:
+        rank_states = [local_state]
+    else:
+        local_values = torch.tensor(
+            [window.next_update_nimg, window.loss_sum, window.loss_count],
+            dtype=torch.float64,
+            device=device,
+        )
+        gathered_values = [torch.empty_like(local_values) for _ in range(world_size)]
+        torch.distributed.all_gather(gathered_values, local_values)
+        rank_states = [
+            {
+                'update_nimg': window.update_nimg,
+                'next_update_nimg': int(values[0]),
+                'loss_sum': float(values[1]),
+                'loss_count': int(values[2]),
+            }
+            for values in gathered_values
+        ]
+
+    # Keep the rank-0 fields at the top level for transparent single-rank
+    # inspection, and retain every local accumulator for exact DDP resumes.
+    return {**rank_states[0], 'rank_states': rank_states}
+
+
+def local_adaptive_signal_window_state(state):
+    """Select this rank's window state from a training-state checkpoint."""
+    if not isinstance(state, dict):
+        return state
+    rank_states = state.get('rank_states')
+    if rank_states is None:
+        return state
+    if not isinstance(rank_states, list) or len(rank_states) != dist.get_world_size():
+        raise ValueError(
+            'adaptive signal window checkpoint rank count does not match the current world size'
+        )
+    return rank_states[dist.get_rank()]
+
 
 def globally_average_adaptive_loss(loss_sum, loss_count, device):
     """Return the sample-weighted loss mean, identical on every rank."""
@@ -376,6 +457,7 @@ def training_loop(
     resumed_cur_nimg = None
     resumed_cur_tick = None
     resumed_tick_start_nimg = None
+    resumed_adaptive_signal_window_state = None
     elapsed_base_sec = 0.0
     if resume_state_dump:
         dist.print0(f'Loading training state from "{resume_state_dump}"...')
@@ -397,6 +479,8 @@ def training_loop(
         elapsed_base_sec = float(data.get('elapsed_sec', 0.0))
         if hasattr(loss_fn, 'load_schedule_state_dict') and 'loss_fn_state' in data:
             loss_fn.load_schedule_state_dict(data['loss_fn_state'])
+        if 'adaptive_signal_window_state' in data:
+            resumed_adaptive_signal_window_state = data['adaptive_signal_window_state']
         if enable_amp:
             if 'gradscaler_state' in data:
                 # NOTE(aiihn): Although not loading the state_dict of the GradScaler works well,
@@ -459,6 +543,20 @@ def training_loop(
         AdaptiveSignalWindow(adaptive_update_kimg, start_nimg=cur_nimg)
         if schedule_name == 'adaptive_v1' else None
     )
+    if adaptive_signal_window is not None and resume_state_dump:
+        if resumed_adaptive_signal_window_state is None:
+            raise RuntimeError(
+                f'resume training-state missing adaptive_signal_window_state: {resume_state_dump}; '
+                'cannot exactly resume adaptive loss aggregation'
+            )
+        adaptive_signal_window.load_state_dict(
+            local_adaptive_signal_window_state(resumed_adaptive_signal_window_state)
+        )
+        if adaptive_signal_window.next_update_nimg <= cur_nimg:
+            raise RuntimeError(
+                'resumed adaptive signal window is due before or at the restored progress: '
+                f'{adaptive_signal_window.next_update_nimg} <= {cur_nimg}'
+            )
 
     if dist.get_rank() == 0:
         summary_path = os.path.join(run_dir, 'train_summary.csv')
@@ -518,7 +616,7 @@ def training_loop(
         loss_fn.update_schedule(stage)
         dist.print0(f'Update scheduler at {cur_tick} ticks, {cur_nimg / 1e3} kimg, ratio {loss_fn.ratio}')
 
-    def build_training_state():
+    def build_training_state(adaptive_signal_window_state=None):
         # Checkpointing happens during maintenance, before the loop advances:
         #   cur_tick += 1
         #   tick_start_nimg = cur_nimg
@@ -535,6 +633,10 @@ def training_loop(
         )
         if hasattr(loss_fn, 'schedule_state_dict'):
             data['loss_fn_state'] = loss_fn.schedule_state_dict()
+        if adaptive_signal_window is not None:
+            if adaptive_signal_window_state is None:
+                raise RuntimeError('adaptive signal window state was not collected for checkpointing')
+            data['adaptive_signal_window_state'] = adaptive_signal_window_state
         if enable_amp:
             data['gradscaler_state'] = scaler.state_dict()
         return data
@@ -717,12 +819,32 @@ def training_loop(
                     pickle.dump(data, f)
             del data # conserve memory
 
-        # Save full dump of the training state.
-        if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
-            torch.save(build_training_state(), os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'))
+        # Save full dump of the training state. Every rank participates in
+        # collecting its local adaptive-loss accumulator; rank 0 writes the
+        # resulting combined state.
+        state_dump_due = (
+            (state_dump_ticks is not None)
+            and (done or cur_tick % state_dump_ticks == 0)
+            and cur_tick != 0
+        )
+        if state_dump_due:
+            adaptive_signal_window_state = (
+                gather_adaptive_signal_window_state(adaptive_signal_window, device)
+                if adaptive_signal_window is not None else None
+            )
+            if dist.get_rank() == 0:
+                torch.save(
+                    build_training_state(adaptive_signal_window_state),
+                    os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'),
+                )
 
         # Save latest checkpoints
-        if (ckpt_ticks is not None) and (done or cur_tick % ckpt_ticks == 0) and cur_tick != 0:
+        latest_checkpoint_due = (
+            (ckpt_ticks is not None)
+            and (done or cur_tick % ckpt_ticks == 0)
+            and cur_tick != 0
+        )
+        if latest_checkpoint_due:
             dist.print0(f'Save the latest checkpoint at {cur_tick:06d} img...')
             data = dict(ema=ema, loss_fn=loss_fn, augment_pipe=augment_pipe, dataset_kwargs=dict(dataset_kwargs))
             for key, value in data.items():
@@ -736,8 +858,15 @@ def training_loop(
                     pickle.dump(data, f)
             del data # conserve memory
 
+            adaptive_signal_window_state = (
+                gather_adaptive_signal_window_state(adaptive_signal_window, device)
+                if adaptive_signal_window is not None else None
+            )
             if dist.get_rank() == 0:
-                torch.save(build_training_state(), os.path.join(run_dir, f'training-state-latest.pt'))
+                torch.save(
+                    build_training_state(adaptive_signal_window_state),
+                    os.path.join(run_dir, f'training-state-latest.pt'),
+                )
 
         # Sample Img
         if (sample_ticks is not None) and (done or cur_tick % sample_ticks == 0) and dist.get_rank() == 0:

@@ -514,6 +514,40 @@ class CollectorInfraTests(unittest.TestCase):
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertIn(expected_error, completed.stderr)
 
+    def test_adaptive_warmup_telemetry_allows_missing_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            summary_path = run_dir / "train_summary.csv"
+            with summary_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = reader.fieldnames
+                row = next(reader)
+            row.update(
+                loss_reference="",
+                correction="0",
+                signal_updates="1",
+                adaptive_active="0",
+            )
+            with summary_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerow(row)
+
+            completed = self._run_collector(
+                run_dir, outdir, data, transfer, schedule="adaptive_v1"
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_migrated_telemetry_prefix_is_auditable_not_fabricated(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

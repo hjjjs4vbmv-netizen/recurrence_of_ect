@@ -10,7 +10,9 @@ from training.ct_training_loop import (
     _LEGACY_TRAIN_SUMMARY_FIELDS,
     _TRAIN_SUMMARY_FIELDS,
     adaptive_update_interval_nimg,
+    gather_adaptive_signal_window_state,
     globally_average_runtime_pairs,
+    local_adaptive_signal_window_state,
     load_and_migrate_train_summary,
 )
 from training.schedules import get_schedule
@@ -36,6 +38,27 @@ class AdaptiveSignalUpdatesTest(unittest.TestCase):
     def test_resume_uses_next_absolute_boundary(self):
         window = AdaptiveSignalWindow(update_kimg=0.5, start_nimg=50_000)
         self.assertEqual(window.next_update_nimg, 50_500)
+
+    def test_resume_preserves_partial_window_loss_aggregation(self):
+        uninterrupted = AdaptiveSignalWindow(update_kimg=0.5)
+        uninterrupted.add(loss_sum=12.0, loss_count=4)
+        self.assertIsNone(uninterrupted.pop_if_due(cur_nimg=384))
+
+        resumed = AdaptiveSignalWindow(update_kimg=0.5, start_nimg=384)
+        checkpoint_state = gather_adaptive_signal_window_state(
+            uninterrupted, device=torch.device('cpu')
+        )
+        self.assertEqual(checkpoint_state['next_update_nimg'], 500)
+        self.assertEqual(checkpoint_state['loss_sum'], 12.0)
+        self.assertEqual(checkpoint_state['loss_count'], 4)
+        resumed.load_state_dict(local_adaptive_signal_window_state(checkpoint_state))
+        self.assertEqual(resumed.state_dict(), uninterrupted.state_dict())
+
+        uninterrupted.add(loss_sum=8.0, loss_count=2)
+        resumed.add(loss_sum=8.0, loss_count=2)
+        self.assertEqual(uninterrupted.pop_if_due(cur_nimg=512), (20.0, 6))
+        self.assertEqual(resumed.pop_if_due(cur_nimg=512), (20.0, 6))
+        self.assertEqual(resumed.state_dict(), uninterrupted.state_dict())
 
     def test_interval_must_be_whole_positive_images(self):
         for value in [0, -0.5, 0.0005, float('inf')]:

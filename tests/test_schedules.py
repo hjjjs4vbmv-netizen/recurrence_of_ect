@@ -125,13 +125,16 @@ class AdaptiveV1Test(unittest.TestCase):
         self.assertLess(adaptive.correction(), 0)
         self.assertTrue((adaptive.compute_r(t=t, stage=2) <= baseline.compute_r(t=t, stage=2)).all())
 
-    def test_warmup_holds_correction_until_configured_updates_complete(self):
+    def test_warmup_establishes_reference_before_enabling_correction(self):
         adaptive = get_schedule('adaptive_v1', loss_ema_beta=0.0, warmup_updates=2)
         baseline = get_schedule('sigmoid')
         t = sample_t()
         adaptive.update_training_signal(10.0)
+        self.assertIsNone(adaptive.loss_reference)
         self.assertTrue(torch.equal(adaptive.compute_r(t=t, stage=2), baseline.compute_r(t=t, stage=2)))
         adaptive.update_training_signal(5.0)
+        self.assertEqual(adaptive.loss_reference, adaptive.loss_ema)
+        self.assertEqual(adaptive.loss_reference, 5.0)
         self.assertEqual(adaptive.correction(), 0.0)
         self.assertTrue(torch.equal(adaptive.compute_r(t=t, stage=2), baseline.compute_r(t=t, stage=2)))
         adaptive.update_training_signal(2.5)

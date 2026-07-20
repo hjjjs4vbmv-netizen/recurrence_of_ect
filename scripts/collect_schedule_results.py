@@ -526,20 +526,24 @@ def main(argv: list[str] | None = None) -> None:
                 abs_tol=1e-6,
             ):
                 fail(f"r_over_t_mean + gap_mean != 1 at attempted_iteration={row['attempted_iteration']}")
-            if (telemetry["loss_ema"] is None) != (telemetry["loss_reference"] is None):
-                fail("loss_ema and loss_reference must both be present or both be empty")
+            if telemetry["loss_reference"] is not None and telemetry["loss_ema"] is None:
+                fail("loss_reference requires loss_ema")
             if telemetry["loss_ema"] is not None and telemetry["loss_ema"] <= 0:
                 fail(f"loss_ema must be > 0, got {telemetry['loss_ema']}")
             if telemetry["loss_reference"] is not None and telemetry["loss_reference"] <= 0:
                 fail(f"loss_reference must be > 0, got {telemetry['loss_reference']}")
-            if telemetry["signal_updates"] == 0 and telemetry["loss_ema"] is not None:
+            if telemetry["signal_updates"] == 0 and (
+                telemetry["loss_ema"] is not None or telemetry["loss_reference"] is not None
+            ):
                 fail("signal_updates=0 requires empty loss_ema/loss_reference")
             if telemetry["signal_updates"] > 0 and telemetry["loss_ema"] is None:
-                fail("positive signal_updates requires loss_ema/loss_reference")
+                fail("positive signal_updates requires loss_ema")
             if not telemetry["adaptive_active"] and telemetry["correction"] != 0:
                 fail("nonzero correction requires adaptive_active=true")
-            if telemetry["adaptive_active"] and telemetry["signal_updates"] == 0:
-                fail("adaptive_active=true requires positive signal_updates")
+            if telemetry["adaptive_active"] and (
+                telemetry["signal_updates"] == 0 or telemetry["loss_reference"] is None
+            ):
+                fail("adaptive_active=true requires positive signal_updates and loss_reference")
             if args.schedule != "adaptive_v1" and (
                 telemetry["signal_updates"] != 0
                 or telemetry["adaptive_active"]

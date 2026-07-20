@@ -167,10 +167,10 @@ class SigmoidSchedule(Schedule):
 class AdaptiveV1Schedule(SigmoidSchedule):
     """Loss-EMA adaptive correction on top of the official sigmoid ratio.
 
-    Let rho_0 be the official sigmoid r/t ratio, L_0 the first finite loss
-    EMA, and L_ema the current loss EMA. The correction is
+    Let rho_0 be the official sigmoid r/t ratio, L_ref the loss EMA at the
+    end of warm-up, and L_ema the current loss EMA. The correction is
 
-        delta = max_adjust * tanh(log(L_0) - log(L_ema))
+        delta = max_adjust * tanh(log(L_ref) - log(L_ema))
 
     and rho = clamp(rho_0 + delta, 0, 1 - min_gap). Improving loss therefore
     tightens the pair (smaller t-r), while worsening loss widens it. The
@@ -217,9 +217,17 @@ class AdaptiveV1Schedule(SigmoidSchedule):
         if not math.isfinite(updated_ema) or updated_ema <= 0:
             return False
         self.loss_ema = updated_ema
-        if self.loss_reference is None:
-            self.loss_reference = updated_ema
         self.signal_updates += 1
+
+        # Establish the baseline only after the requested number of valid
+        # signals have contributed to the EMA. With no warm-up, the first
+        # signal is necessarily the baseline (and therefore has zero
+        # correction); otherwise the following signal is the first one that
+        # can produce a correction relative to this reference.
+        if self.loss_reference is None and (
+            self.warmup_updates == 0 or self.signal_updates == self.warmup_updates
+        ):
+            self.loss_reference = updated_ema
         return True
 
     def correction_is_active(self):
