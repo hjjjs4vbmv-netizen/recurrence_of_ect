@@ -1,7 +1,9 @@
 # Adaptive v1 activation — clean A100 evidence
 
 This directory records the clean single-GPU activation validation of
-`adaptive_v1` at commit `cb84a93454a91500d01433dd2d024d775fb275ef`.
+`adaptive_v1` at commit `cb84a93454a91500d01433dd2d024d775fb275ef`, rerun
+against the canonical CIFAR-10 archive
+`08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372`.
 It validates controller activation and checkpoint/CSV consistency; it is **not**
 a fixed-vs-adaptive quality comparison, stability result, or baseline result.
 
@@ -14,6 +16,7 @@ a fixed-vs-adaptive quality comparison, stability result, or baseline result.
 | Runtime | Python 3.9.18 / PyTorch 2.3.0 / CUDA 12.1 |
 | Mode / schedule | `activation` / `adaptive_v1` |
 | Duration / progress | 0.004 Mimg / 4.096 kimg |
+| Dataset archive SHA-256 | `08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372` (canonical) |
 | Attempted / successful / skipped | 32 / 23 / 9 |
 | AMP | enabled; GradScaler state saved |
 | Recorded training and packaging worktrees | clean, at `cb84a934...` |
@@ -45,6 +48,6 @@ digests where applicable.
 ## Local artifact hashes
 
 ```text
-0ea1bad278bc13ba90ebb8a10277f17a4b09b90129f374e02f17a8953b63a4f2  metadata.json
-c200c1aea8fe6dbed92526dca17b8999415c099ffd2f18d316a0caaa8bb0b735  train_summary.csv
+c60c7c9b0086c663b92a4f61b3d7a79409dd48d64e563b49b947b8f2c272047f  metadata.json
+a052b55d7f04a49bfc1ea6f8689c4d57b1c6855e3cfb4095aa9cc42e8363f87c  train_summary.csv
 ```

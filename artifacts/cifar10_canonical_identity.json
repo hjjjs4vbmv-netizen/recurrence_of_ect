@@ -55,11 +55,20 @@
     },
     "status": "passed"
   },
-  "role_c_activation_archive": {
+  "prior_role_c_activation_archive": {
     "recorded_sha256": "9fd64620e37bfc0c995535fa52701c9641bcd07635008bfda0c9fbddde1a4ed6",
     "byte_identical_to_canonical": false,
     "semantic_equivalence": "not_established",
-    "formal_evidence_status": "noncanonical_until_rerun_or_semantic_identity_match"
+    "formal_evidence_status": "superseded_by_canonical_rerun"
+  },
+  "canonical_role_c_activation_rerun": {
+    "run_id": "adaptive-v1-activation-cb84a934-20260720T153954Z",
+    "dataset_sha256": "08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372",
+    "evidence_path": "results/adaptive_v1_activation_a100_cb84a934",
+    "metadata_sha256": "c60c7c9b0086c663b92a4f61b3d7a79409dd48d64e563b49b947b8f2c272047f",
+    "train_summary_sha256": "a052b55d7f04a49bfc1ea6f8689c4d57b1c6855e3cfb4095aa9cc42e8363f87c",
+    "collector_status": "passed",
+    "activation_gate_passed": true
   },
   "experiment_policy": {
     "required_dataset_sha256": "08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372",
