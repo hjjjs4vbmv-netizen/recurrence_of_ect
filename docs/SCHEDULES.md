@@ -62,6 +62,10 @@ rho   = clamp(rho_0 + delta, 0, 1 - adaptive_min_gap)
 r     = t * rho
 ```
 
+`adaptive_v1` 在没有有效 correction（尚无有效 signal、warmup 中，或
+`adaptive_max_adjust=0`）时直接返回官方 sigmoid 的 `rho_0`，按位保持 fixed
+baseline。只有 correction 激活后才应用 `adaptive_min_gap` 上限与上式中的修正。
+
 - loss 下降时 `delta > 0`，减小 `t-r`，加强一致性约束；
 - loss 恶化时 `delta < 0`，增大 `t-r`，降低当前任务难度；
 - `|delta| <= adaptive_max_adjust`，不做搜索或额外控制器；

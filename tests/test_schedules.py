@@ -88,7 +88,7 @@ class OfficialFormulaParityTest(unittest.TestCase):
 
 
 class AdaptiveV1Test(unittest.TestCase):
-    def test_without_signal_is_official_sigmoid_with_safety_cap(self):
+    def test_without_signal_is_official_sigmoid_bitwise(self):
         for device in devices():
             for q in [2.0, 256.0]:
                 for stage in [0, 1, 3, 7]:
@@ -97,7 +97,6 @@ class AdaptiveV1Test(unittest.TestCase):
                         expected = official_t_to_r('sigmoid', t, stage, q=q)
                         adaptive = get_schedule('adaptive_v1', q=q)
                         actual = adaptive.compute_r(t=t, stage=stage)
-                        expected = torch.minimum(expected, t * (1 - adaptive.min_gap))
                         self.assertTrue(torch.equal(actual, expected))
 
     def test_loss_improvement_tightens_gap_with_bounded_correction(self):
@@ -128,11 +127,31 @@ class AdaptiveV1Test(unittest.TestCase):
 
     def test_warmup_holds_correction_until_configured_updates_complete(self):
         adaptive = get_schedule('adaptive_v1', loss_ema_beta=0.0, warmup_updates=2)
+        baseline = get_schedule('sigmoid')
+        t = sample_t()
         adaptive.update_training_signal(10.0)
+        self.assertTrue(torch.equal(adaptive.compute_r(t=t, stage=2), baseline.compute_r(t=t, stage=2)))
         adaptive.update_training_signal(5.0)
         self.assertEqual(adaptive.correction(), 0.0)
+        self.assertTrue(torch.equal(adaptive.compute_r(t=t, stage=2), baseline.compute_r(t=t, stage=2)))
         adaptive.update_training_signal(2.5)
         self.assertGreater(adaptive.correction(), 0.0)
+
+    def test_min_gap_only_applies_after_correction_is_active(self):
+        t = torch.tensor([10.0])
+        baseline = get_schedule('sigmoid', q=256.0)
+        expected = baseline.compute_r(t=t, stage=0)
+        inactive = get_schedule('adaptive_v1', q=256.0, min_gap=0.1)
+        self.assertTrue(torch.equal(inactive.compute_r(t=t, stage=0), expected))
+
+        active = get_schedule('adaptive_v1', q=256.0, loss_ema_beta=0.0,
+                              warmup_updates=0, min_gap=0.1)
+        active.update_training_signal(10.0)  # delta is zero, but correction is active.
+        self.assertEqual(active.correction(), 0.0)
+        self.assertTrue(torch.equal(
+            active.compute_r(t=t, stage=0),
+            torch.minimum(expected, t * 0.9),
+        ))
 
     def test_output_is_finite_bounded_and_deterministic(self):
         t = torch.tensor([0.0, 1e-12, 0.1, 1.0, 80.0, float('inf'), float('nan')])
@@ -149,6 +168,8 @@ class AdaptiveV1Test(unittest.TestCase):
         self.assertTrue((r_first[finite_t] <= t[finite_t]).all())
 
         unusual_k = get_schedule('adaptive_v1', k=-100.0)
+        for loss in [10.0, 8.0, 6.0]:
+            unusual_k.update_training_signal(loss)
         unusual_r = unusual_k.compute_r(t=t, stage=3)
         self.assertTrue(torch.isfinite(unusual_r).all())
         self.assertTrue((unusual_r[finite_t] <= t[finite_t]).all())
@@ -289,6 +310,7 @@ class ECMLossIntegrationTest(unittest.TestCase):
         loss_fn = make_loss('sigmoid', q=2.0)
         loss_fn.update_schedule(3)
         self.assertEqual(loss_fn.ratio, 1 - 1 / 2.0 ** 4)
+        self.assertEqual(loss_fn.schedule.stage, 3)
 
     def test_loss_fn_pickles_with_schedule(self):
         # Training snapshots pickle loss_fn (ct_training_loop.py:340); the

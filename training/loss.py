@@ -45,6 +45,7 @@ class ECMLoss:
 
     def update_schedule(self, stage):
         self.stage = stage
+        self.schedule.update_schedule(stage)
         self.ratio = 1 - 1 / self.q ** (stage+1)
 
     def update_training_signal(self, loss):

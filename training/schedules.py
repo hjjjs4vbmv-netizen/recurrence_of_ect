@@ -212,9 +212,16 @@ class AdaptiveV1Schedule(SigmoidSchedule):
         self.signal_updates += 1
         return True
 
+    def correction_is_active(self):
+        return (
+            self.max_adjust != 0
+            and self.loss_ema is not None
+            and self.loss_reference is not None
+            and self.signal_updates > self.warmup_updates
+        )
+
     def correction(self):
-        if (self.max_adjust == 0 or self.loss_ema is None or self.loss_reference is None
-                or self.signal_updates <= self.warmup_updates):
+        if not self.correction_is_active():
             return 0.0
         log_improvement = math.log(self.loss_reference) - math.log(self.loss_ema)
         return self.max_adjust * math.tanh(log_improvement)
@@ -224,6 +231,13 @@ class AdaptiveV1Schedule(SigmoidSchedule):
         if not math.isfinite(stage) or stage < 0:
             raise ValueError(f'stage must be finite and >= 0, got {stage}')
         t = _as_tensor(t)
+
+        # Before a correction is active, adaptive_v1 is exactly the official
+        # sigmoid schedule. In particular, min_gap must not alter the no-signal
+        # or warmup path.
+        if not self.correction_is_active():
+            return super().compute_r(t=t, stage=stage)
+
         if not t.is_floating_point():
             t = t.to(torch.get_default_dtype())
         finite_max = torch.finfo(t.dtype).max
@@ -235,13 +249,6 @@ class AdaptiveV1Schedule(SigmoidSchedule):
             # q**(stage+1) -> inf, so the mathematical sigmoid ratio -> 1.
             base_r = t
         delta = self.correction()
-        if delta == 0:
-            upper = t if self.max_adjust == 0 else t * (1 - self.min_gap)
-            return torch.minimum(
-                torch.nan_to_num(base_r, nan=0.0, posinf=finite_max, neginf=0.0).clamp_min(0),
-                upper,
-            )
-
         base_ratio = torch.where(t > 0, base_r / t, torch.zeros_like(t))
         ratio = torch.clamp(base_ratio + delta, min=0, max=1 - self.min_gap)
         r = torch.nan_to_num(t * ratio, nan=0.0, posinf=finite_max, neginf=0.0)
