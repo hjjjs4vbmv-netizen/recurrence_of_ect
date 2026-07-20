@@ -36,6 +36,7 @@ def write_minimal_run(
     data_path: Path | None = None,
     transfer_path: Path | None = None,
     include_telemetry: bool = False,
+    next_loop_cur_tick: int = 2,
 ) -> None:
     import hashlib
     import math
@@ -102,6 +103,7 @@ def write_minimal_run(
                 "step_skipped",
                 "schedule",
                 "stage",
+                "next_loop_cur_tick",
                 "elapsed_sec",
                 "peak_vram_gb",
             ]
@@ -127,6 +129,7 @@ def write_minimal_run(
                 "step_skipped": 0,
                 "schedule": schedule,
                 "stage": 0,
+                "next_loop_cur_tick": next_loop_cur_tick,
                 "elapsed_sec": "1.0",
                 "peak_vram_gb": "1.5",
             }
@@ -155,13 +158,15 @@ def write_collector_training_state(
     attempted_iteration: int = 1,
     successful_optimizer_steps: int = 1,
     elapsed_sec: float = 1.0,
+    cur_tick: int = 2,
+    signal_updates: int = 3,
 ) -> dict:
     import torch
 
     state = {
         "gradscaler_state": {"scale": 65536.0},
         "cur_nimg": cur_nimg,
-        "cur_tick": 1,
+        "cur_tick": cur_tick,
         "attempted_iteration": attempted_iteration,
         "successful_optimizer_steps": successful_optimizer_steps,
         "elapsed_sec": elapsed_sec,
@@ -176,7 +181,7 @@ def write_collector_training_state(
         state["loss_fn_state"]["schedule"] = {
             "loss_ema": 0.8,
             "loss_reference": 1.0,
-            "signal_updates": 3,
+            "signal_updates": signal_updates,
         }
     torch.save(state, run_dir / "training-state-latest.pt")
     return state
@@ -226,6 +231,7 @@ def write_adaptive_activation_run(
                 "step_skipped": "0",
                 "schedule": "adaptive_v1",
                 "stage": "0",
+                "next_loop_cur_tick": "1" if iteration < 32 else "2",
                 "elapsed_sec": f"{iteration / 10:.1f}",
                 "peak_vram_gb": "1.5",
                 "loss_ema": "0.8" if signal_updates else "",
@@ -572,6 +578,7 @@ class CollectorInfraTests(unittest.TestCase):
             self.assertEqual(packaged["signal_updates"], "3")
             self.assertEqual(packaged["adaptive_active"], "1")
             self.assertEqual(packaged["r_over_t_mean"], "0.75")
+            self.assertEqual(packaged["next_loop_cur_tick"], "2")
             metadata = json.loads((outdir / "metadata.json").read_text(encoding="utf-8"))
             self.assertTrue(metadata["schedule_telemetry_available"])
             self.assertEqual(metadata["final_signal_updates"], 3)
@@ -601,7 +608,7 @@ class CollectorInfraTests(unittest.TestCase):
             ),
             (
                 "cur_tick",
-                lambda state: state.update(cur_tick=2),
+                lambda state: state.update(cur_tick=3),
                 "training-state cur_tick mismatch",
             ),
             (
@@ -674,6 +681,44 @@ class CollectorInfraTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_baseline_training_state_uses_recorded_tick_not_tick_formula(self):
+        # With batch=128 and default --tick=50 kimg, real maintenance runs at
+        # 0.128, 50.176, 100.224, and 128 kimg. The final checkpoint therefore
+        # persists cur_tick=4, whereas the removed ceil-based formula gives 3.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                mode="baseline",
+                duration=0.128,
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+                next_loop_cur_tick=4,
+            )
+            write_collector_training_state(
+                run_dir,
+                schedule="adaptive_v1",
+                cur_nimg=128_000,
+                cur_tick=4,
+            )
+            completed = self._run_collector(
+                run_dir,
+                outdir,
+                data,
+                transfer,
+                schedule="adaptive_v1",
+                mode="baseline",
+                load_training_state=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            with (outdir / "train_summary.csv").open(newline="", encoding="utf-8") as handle:
+                self.assertEqual(next(csv.DictReader(handle))["next_loop_cur_tick"], "4")
+
     def test_adaptive_activation_gate_records_controller_and_pair_boundaries(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -685,11 +730,24 @@ class CollectorInfraTests(unittest.TestCase):
                 data_path=data,
                 transfer_path=transfer,
             )
+            write_collector_training_state(
+                run_dir,
+                schedule="adaptive_v1",
+                cur_nimg=4_096,
+                attempted_iteration=32,
+                successful_optimizer_steps=32,
+                elapsed_sec=3.2,
+                cur_tick=2,
+                signal_updates=8,
+            )
             completed = self._run_collector(
                 run_dir, outdir, data, transfer,
                 schedule="adaptive_v1", mode="activation",
+                load_training_state=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
+            with (run_dir / "train_summary.csv").open(newline="", encoding="utf-8") as handle:
+                self.assertEqual(list(csv.DictReader(handle))[-1]["next_loop_cur_tick"], "2")
             metadata = json.loads((outdir / "metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["final_signal_updates"], 8)
             self.assertTrue(metadata["final_adaptive_active"])

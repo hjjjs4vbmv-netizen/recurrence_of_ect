@@ -94,6 +94,8 @@ attempted iteration:
 - `step_skipped`
 - `schedule`
 - `stage`
+- `next_loop_cur_tick` (the exact tick that a checkpoint written during that
+  iteration will persist)
 - `loss_ema` / `loss_reference`
 - `correction` / `signal_updates` / `adaptive_active`
 - `r_over_t_mean` / `gap_mean`
@@ -102,12 +104,17 @@ attempted iteration:
 
 Counters and exact progress (`cur_nimg`, next-loop `cur_tick`,
 `tick_start_nimg`) are stored in `training-state-*.pt` and restored on resume.
+The CSV records that next-loop tick directly, so result collection compares it
+with the checkpoint rather than reconstructing maintenance boundaries from
+image count or `--tick`.
 Fresh runs refuse to append an existing non-empty CSV; legal resumes append only
 after validating the last row against restored counters / `cur_nimg` / schedule.
 When resuming a run with the exact pre-telemetry 11-column schema, the training
 loop saves `train_summary.csv.pre-telemetry.bak` and atomically upgrades the CSV
-to the current schema. Historical telemetry cells stay empty because controller
-state cannot be reconstructed. Unknown or partial schemas remain hard errors.
+to the current schema. The immediately preceding telemetry schema is likewise
+upgraded with a `.pre-next-loop-tick.bak` backup. Historical telemetry and tick
+cells that were absent from their source schema stay empty because those values
+cannot be reconstructed. Unknown or partial schemas remain hard errors.
 
 Schedule telemetry is obtained through the stable
 `loss_fn.schedule_runtime_metrics()` interface; the training loop and result

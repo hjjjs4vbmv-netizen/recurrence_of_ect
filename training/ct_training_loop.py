@@ -35,7 +35,9 @@ _LEGACY_TRAIN_SUMMARY_FIELDS = (
     'peak_vram_gb',
 )
 
-_TRAIN_SUMMARY_FIELDS = (
+# The telemetry schema predating next_loop_cur_tick. Keep this exact tuple so
+# resumed runs can be migrated without guessing historical tick state.
+_PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS = (
     'attempted_iteration',
     'successful_optimizer_steps',
     'processed_nimg',
@@ -56,13 +58,37 @@ _TRAIN_SUMMARY_FIELDS = (
     'peak_vram_gb',
 )
 
+_TRAIN_SUMMARY_FIELDS = (
+    'attempted_iteration',
+    'successful_optimizer_steps',
+    'processed_nimg',
+    'processed_kimg',
+    'loss',
+    'grad_scale',
+    'step_skipped',
+    'schedule',
+    'stage',
+    # The state that will be used by the next loop iteration. At a
+    # maintenance boundary this is also the cur_tick persisted in a checkpoint.
+    'next_loop_cur_tick',
+    'loss_ema',
+    'loss_reference',
+    'correction',
+    'signal_updates',
+    'adaptive_active',
+    'r_over_t_mean',
+    'gap_mean',
+    'elapsed_sec',
+    'peak_vram_gb',
+)
+
 #----------------------------------------------------------------------------
 
 def load_and_migrate_train_summary(summary_path):
-    """Load a resume CSV, upgrading only the known pre-telemetry schema.
+    """Load a resume CSV, upgrading only known historical schemas.
 
-    Historical controller telemetry cannot be reconstructed, so migrated rows
-    deliberately contain empty telemetry cells. The original file is retained
+    Values absent from the original schema cannot be reconstructed, so their
+    migrated cells deliberately stay empty. The original file is retained
     beside the upgraded CSV for auditability.
     """
     with open(summary_path, 'rt', newline='') as handle:
@@ -74,13 +100,16 @@ def load_and_migrate_train_summary(summary_path):
         raise RuntimeError(f'resume requested but {summary_path} has no data rows')
     if fieldnames == _TRAIN_SUMMARY_FIELDS:
         return rows, None
-    if fieldnames != _LEGACY_TRAIN_SUMMARY_FIELDS:
+    if fieldnames == _LEGACY_TRAIN_SUMMARY_FIELDS:
+        backup_path = f'{summary_path}.pre-telemetry.bak'
+    elif fieldnames == _PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS:
+        backup_path = f'{summary_path}.pre-next-loop-tick.bak'
+    else:
         raise RuntimeError(
             f'resume requested but {summary_path} has an unsupported schema; '
-            'expected the current telemetry schema or the exact legacy schema'
+            'expected the current schema or an exact supported legacy schema'
         )
 
-    backup_path = f'{summary_path}.pre-telemetry.bak'
     if os.path.exists(backup_path):
         if not filecmp.cmp(summary_path, backup_path, shallow=False):
             raise RuntimeError(
@@ -588,6 +617,29 @@ def training_loop(
                         f'train_summary.csv last processed_nimg={last_nimg} '
                         f'does not match resumed cur_nimg={cur_nimg}'
                     )
+                last_next_loop_tick = str(last.get('next_loop_cur_tick', '')).strip()
+                if last_next_loop_tick:
+                    try:
+                        parsed_next_loop_tick = float(last_next_loop_tick)
+                    except ValueError as exc:
+                        raise RuntimeError(
+                            'train_summary.csv last next_loop_cur_tick must be numeric: '
+                            f'{last_next_loop_tick!r}'
+                        ) from exc
+                    if (
+                        not math.isfinite(parsed_next_loop_tick)
+                        or not parsed_next_loop_tick.is_integer()
+                        or parsed_next_loop_tick < 0
+                    ):
+                        raise RuntimeError(
+                            'train_summary.csv last next_loop_cur_tick must be a '
+                            f'non-negative integer: {last_next_loop_tick!r}'
+                        )
+                    if int(parsed_next_loop_tick) != cur_tick:
+                        raise RuntimeError(
+                            f'train_summary.csv last next_loop_cur_tick={last_next_loop_tick} '
+                            f'does not match resumed cur_tick={cur_tick}'
+                        )
                 if not attempted_iteration:
                     attempted_iteration = last_attempted
                     successful_optimizer_steps = int(float(
@@ -756,6 +808,18 @@ def training_loop(
         training_stats.report0('Schedule/r_over_t_mean', schedule_runtime_metrics['r_over_t_mean'])
         training_stats.report0('Schedule/gap_mean', schedule_runtime_metrics['gap_mean'])
 
+        # Record the exact state that the following loop iteration will see.
+        # This cannot be derived reliably from image count: the first iteration
+        # always performs maintenance, and completion forces it regardless of
+        # --tick. A checkpoint saved below persists this same cur_tick value.
+        done = (cur_nimg >= total_kimg * 1000)
+        maintenance_due = (
+            done
+            or cur_tick == 0
+            or cur_nimg >= tick_start_nimg + kimg_per_tick * 1000
+        )
+        next_loop_cur_tick = cur_tick + int(maintenance_due)
+
         if train_summary_writer is not None:
             train_summary_writer.writerow({
                 'attempted_iteration': attempted_iteration,
@@ -767,6 +831,7 @@ def training_loop(
                 'step_skipped': step_skipped,
                 'schedule': schedule_name,
                 'stage': stage,
+                'next_loop_cur_tick': next_loop_cur_tick,
                 'loss_ema': '' if schedule_runtime_metrics['loss_ema'] is None else f"{schedule_runtime_metrics['loss_ema']:.12g}",
                 'loss_reference': '' if schedule_runtime_metrics['loss_reference'] is None else f"{schedule_runtime_metrics['loss_reference']:.12g}",
                 'correction': f"{schedule_runtime_metrics['correction']:.12g}",
@@ -780,8 +845,7 @@ def training_loop(
             train_summary_csv.flush()
 
         # Perform maintenance tasks once per tick.
-        done = (cur_nimg >= total_kimg * 1000)
-        if (not done) and (cur_tick != 0) and (cur_nimg < tick_start_nimg + kimg_per_tick * 1000):
+        if not maintenance_due:
             continue
 
         # Print status line, accumulating the same information in training_stats.

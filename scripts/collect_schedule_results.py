@@ -41,6 +41,7 @@ OUTPUT_FIELDS = (
     "step_skipped",
     "schedule",
     "stage",
+    "next_loop_cur_tick",
     *TELEMETRY_FIELDS,
     "seconds",
     "peak_vram_mib",
@@ -365,30 +366,6 @@ def extract_duration_from_command(exact_command: str) -> float | None:
     return None
 
 
-def extract_tick_kimg_from_command(exact_command: str) -> float:
-    """Read --tick from the recorded command, matching ct_train's default."""
-    try:
-        tokens = shlex.split(exact_command)
-    except ValueError:
-        tokens = exact_command.split()
-    for index, token in enumerate(tokens):
-        if token.startswith("--tick="):
-            value = token.split("=", 1)[1]
-            break
-        if token == "--tick" and index + 1 < len(tokens):
-            value = tokens[index + 1]
-            break
-    else:
-        return 50.0
-    try:
-        tick_kimg = float(value)
-    except ValueError:
-        fail(f"--tick must be numeric in exact_command, got {value!r}")
-    if not math.isfinite(tick_kimg) or tick_kimg <= 0:
-        fail(f"--tick must be positive in exact_command, got {value!r}")
-    return tick_kimg
-
-
 def _state_integer(state: dict, key: str, training_state: Path) -> int:
     try:
         value = int(state[key])
@@ -416,8 +393,6 @@ def validate_training_state_against_csv(
     last_csv_row: dict,
     last_packaged_row: dict,
     schedule: str,
-    exact_command: str,
-    global_batch: int,
 ) -> None:
     """Fail closed when the checkpoint does not describe the final CSV row."""
     csv_nimg = int(float(last_csv_row["processed_nimg"]))
@@ -444,17 +419,17 @@ def validate_training_state_against_csv(
             f"({training_state})"
         )
 
-    # The training state stores the next-loop tick, while a summary row is
-    # recorded on the current tick. The final checkpoint is written at a
-    # maintenance boundary; derive that boundary from the recorded --tick.
-    tick_nimg = extract_tick_kimg_from_command(exact_command) * 1000
-    tick_span_nimg = math.ceil(tick_nimg / global_batch) * global_batch
-    expected_cur_tick = math.ceil(csv_nimg / tick_span_nimg)
+    # The training state persists the next-loop tick. The training loop records
+    # that authoritative value in the CSV instead of asking the collector to
+    # recreate maintenance timing from --tick and image count.
+    expected_cur_tick = parse_nonnegative_integer(
+        last_csv_row.get("next_loop_cur_tick"), "next_loop_cur_tick"
+    )
     actual_cur_tick = _state_integer(state, "cur_tick", training_state)
     if actual_cur_tick != expected_cur_tick:
         fail(
             f"training-state cur_tick mismatch: state={actual_cur_tick} "
-            f"csv_last_expected={expected_cur_tick} ({training_state})"
+            f"csv_last_next_loop={expected_cur_tick} ({training_state})"
         )
 
     if schedule != "adaptive_v1":
@@ -756,6 +731,7 @@ def main(argv: list[str] | None = None) -> None:
                 "step_skipped": "true" if step_skipped else "false",
                 "schedule": row.get("schedule", args.schedule),
                 "stage": row.get("stage", ""),
+                "next_loop_cur_tick": row.get("next_loop_cur_tick", ""),
                 **telemetry,
                 "seconds": float(row["elapsed_sec"]),
                 "peak_vram_mib": peak_gb * 1024.0,
@@ -839,8 +815,6 @@ def main(argv: list[str] | None = None) -> None:
             last_csv_row=rows[-1],
             last_packaged_row=packaged[-1],
             schedule=args.schedule,
-            exact_command=exact_command,
-            global_batch=args.global_batch,
         )
         print(f"[collect_schedule_results] loaded training-state: {training_state}")
 
@@ -945,6 +919,7 @@ def main(argv: list[str] | None = None) -> None:
                     "step_skipped": row["step_skipped"],
                     "schedule": row["schedule"],
                     "stage": row["stage"],
+                    "next_loop_cur_tick": row["next_loop_cur_tick"],
                     "loss_ema": "" if row["loss_ema"] is None else f"{row['loss_ema']:.12g}",
                     "loss_reference": "" if row["loss_reference"] is None else f"{row['loss_reference']:.12g}",
                     "correction": "" if row["correction"] is None else f"{row['correction']:.12g}",

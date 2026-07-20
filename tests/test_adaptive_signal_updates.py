@@ -8,6 +8,7 @@ import torch
 from training.ct_training_loop import (
     AdaptiveSignalWindow,
     _LEGACY_TRAIN_SUMMARY_FIELDS,
+    _PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS,
     _TRAIN_SUMMARY_FIELDS,
     adaptive_update_interval_nimg,
     gather_adaptive_signal_window_state,
@@ -76,7 +77,7 @@ class AdaptiveSignalUpdatesTest(unittest.TestCase):
         self.assertAlmostEqual(metrics['r_over_t_mean'], 0.7)
         self.assertAlmostEqual(metrics['gap_mean'], 0.3)
 
-    def test_resume_migrates_only_exact_legacy_summary_schema(self):
+    def test_resume_migrates_exact_legacy_summary_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
             summary_path = Path(tmp) / 'train_summary.csv'
             legacy_row = {
@@ -108,7 +109,7 @@ class AdaptiveSignalUpdatesTest(unittest.TestCase):
                 self.assertEqual(tuple(reader.fieldnames), _TRAIN_SUMMARY_FIELDS)
             for field in (
                 'loss_ema', 'loss_reference', 'correction', 'signal_updates',
-                'adaptive_active', 'r_over_t_mean', 'gap_mean',
+                'adaptive_active', 'r_over_t_mean', 'gap_mean', 'next_loop_cur_tick',
             ):
                 self.assertEqual(migrated[field], '')
                 self.assertEqual(rows[0][field], '')
@@ -116,6 +117,34 @@ class AdaptiveSignalUpdatesTest(unittest.TestCase):
             current_rows, second_backup = load_and_migrate_train_summary(summary_path)
             self.assertIsNone(second_backup)
             self.assertEqual(current_rows, rows)
+
+    def test_resume_migrates_pre_next_loop_tick_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_path = Path(tmp) / 'train_summary.csv'
+            row = {field: '' for field in _PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS}
+            row.update(
+                attempted_iteration='4', successful_optimizer_steps='4',
+                processed_nimg='512', processed_kimg='0.512', loss='1.25',
+                grad_scale='65536', step_skipped='0', schedule='adaptive_v1',
+                stage='0', loss_ema='0.8', correction='0.02',
+                elapsed_sec='2.0', peak_vram_gb='1.5',
+            )
+            with summary_path.open('w', newline='') as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=_PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS
+                )
+                writer.writeheader()
+                writer.writerow(row)
+
+            rows, backup_path = load_and_migrate_train_summary(summary_path)
+            self.assertEqual(backup_path, f'{summary_path}.pre-next-loop-tick.bak')
+            self.assertEqual(rows[0]['next_loop_cur_tick'], '')
+            self.assertEqual(rows[0]['loss_ema'], '0.8')
+            self.assertEqual(rows[0]['correction'], '0.02')
+            with summary_path.open(newline='') as handle:
+                self.assertEqual(
+                    tuple(csv.DictReader(handle).fieldnames), _TRAIN_SUMMARY_FIELDS
+                )
 
     def test_resume_rejects_unknown_summary_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
