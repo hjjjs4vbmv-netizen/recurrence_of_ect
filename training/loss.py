@@ -5,22 +5,32 @@ import torch.nn as nn
 from torch_utils import persistence
 from torch_utils import distributed as dist
 
+from training.schedules import get_schedule
+
 #----------------------------------------------------------------------------
 # Loss function proposed in the blog "Consistency Models Made Easy"
 
 @persistence.persistent_class
 class ECMLoss:
-    def __init__(self, P_mean=-1.1, P_std=2.0, sigma_data=0.5, q=2, c=0.0, k=8.0, b=1.0, cut=4.0, adj='sigmoid'):
+    def __init__(self, P_mean=-1.1, P_std=2.0, sigma_data=0.5, q=2, c=0.0, k=8.0, b=1.0, cut=4.0,
+                 adj='sigmoid', adaptive_loss_ema_beta=0.9, adaptive_max_adjust=0.05,
+                 adaptive_min_gap=1e-3):
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
         
-        if adj == 'const':
-            self.t_to_r = self.t_to_r_const
-        elif adj == 'sigmoid':
-            self.t_to_r = self.t_to_r_sigmoid
-        else:
-            raise ValueError(f'Unknow schedule type {adj}!')
+        # t -> r entry point, dispatched through training/schedules.py.
+        # 'const' / 'sigmoid' are the official fixed formulas (bit-identical
+        # to the reference methods below); 'adaptive_v1' is the Role C
+        # experiment.
+        schedule_kwargs = dict(q=q, k=k, b=b)
+        if adj == 'adaptive_v1':
+            schedule_kwargs.update(
+                loss_ema_beta=adaptive_loss_ema_beta,
+                max_adjust=adaptive_max_adjust,
+                min_gap=adaptive_min_gap,
+            )
+        self.schedule = get_schedule(adj, **schedule_kwargs)
 
         self.q = q
         self.stage = 0
@@ -36,6 +46,34 @@ class ECMLoss:
         self.stage = stage
         self.ratio = 1 - 1 / self.q ** (stage+1)
 
+    def update_training_signal(self, loss):
+        return self.schedule.update_training_signal(loss)
+
+    def schedule_state_dict(self):
+        return {
+            'schedule_name': self.schedule.name,
+            'stage': self.stage,
+            'ratio': self.ratio,
+            'schedule': self.schedule.state_dict(),
+        }
+
+    def load_schedule_state_dict(self, state):
+        saved_name = state.get('schedule_name')
+        if saved_name is not None and saved_name != self.schedule.name:
+            return False
+        self.stage = state.get('stage', self.stage)
+        self.ratio = state.get('ratio', self.ratio)
+        self.schedule.load_state_dict(state.get('schedule', {}))
+        return True
+
+    def schedule_metadata(self):
+        metadata = self.schedule.metadata()
+        metadata.update(stage=self.stage, ratio=self.ratio)
+        return metadata
+
+    # Official fixed t->r formulas, kept verbatim as the parity reference for
+    # tests/test_schedules.py; the training path dispatches through
+    # self.schedule (see __call__).
     def t_to_r_const(self, t):
         decay = 1 / self.q ** (self.stage+1)
         ratio = 1 - decay
@@ -53,7 +91,7 @@ class ECMLoss:
         # t ~ p(t) and r ~ p(r|t, iters) (Mapping fn)
         rnd_normal = torch.randn([images.shape[0], 1, 1, 1], device=images.device)
         t = (rnd_normal * self.P_std + self.P_mean).exp()
-        r = self.t_to_r(t)
+        r = self.schedule.compute_r(t=t, stage=self.stage)
 
         # Augmentation if needed
         y, augment_labels = augment_pipe(images) if augment_pipe is not None else (images, None)
