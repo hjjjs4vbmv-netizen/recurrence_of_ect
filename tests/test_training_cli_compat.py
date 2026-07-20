@@ -22,6 +22,8 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
         self.assertEqual(params['mapping'], 'sigmoid')
         self.assertNotIn('schedule', params)
         self.assertEqual(params['adaptive_loss_ema_beta'], 0.9)
+        self.assertEqual(params['adaptive_update_kimg'], 0.5)
+        self.assertEqual(params['adaptive_warmup_updates'], 2)
         self.assertEqual(params['adaptive_max_adjust'], 0.05)
         self.assertEqual(params['adaptive_min_gap'], 1e-3)
 
@@ -52,12 +54,16 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
         params = parse_train_args(
             '--schedule', 'adaptive_v1',
             '--adaptive-loss-ema-beta', '0.8',
+            '--adaptive-update-kimg', '0.25',
+            '--adaptive-warmup-updates', '3',
             '--adaptive-max-adjust', '0.04',
             '--adaptive-min-gap', '0.002',
         )
         loss_kwargs = ct_train.make_loss_kwargs(dnnlib.EasyDict(params))
         self.assertEqual(loss_kwargs.adj, 'adaptive_v1')
         self.assertEqual(loss_kwargs.adaptive_loss_ema_beta, 0.8)
+        self.assertEqual(params['adaptive_update_kimg'], 0.25)
+        self.assertEqual(loss_kwargs.adaptive_warmup_updates, 3)
         self.assertEqual(loss_kwargs.adaptive_max_adjust, 0.04)
         self.assertEqual(loss_kwargs.adaptive_min_gap, 0.002)
 

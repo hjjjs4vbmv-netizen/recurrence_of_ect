@@ -14,7 +14,7 @@ from training.schedules import get_schedule
 class ECMLoss:
     def __init__(self, P_mean=-1.1, P_std=2.0, sigma_data=0.5, q=2, c=0.0, k=8.0, b=1.0, cut=4.0,
                  adj='sigmoid', adaptive_loss_ema_beta=0.9, adaptive_max_adjust=0.05,
-                 adaptive_min_gap=1e-3):
+                 adaptive_min_gap=1e-3, adaptive_warmup_updates=2):
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
@@ -29,6 +29,7 @@ class ECMLoss:
                 loss_ema_beta=adaptive_loss_ema_beta,
                 max_adjust=adaptive_max_adjust,
                 min_gap=adaptive_min_gap,
+                warmup_updates=adaptive_warmup_updates,
             )
         self.schedule = get_schedule(adj, **schedule_kwargs)
 

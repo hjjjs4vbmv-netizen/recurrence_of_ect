@@ -3,6 +3,7 @@ import csv
 import time
 import copy
 import json
+import math
 import pickle
 import psutil
 import functools
@@ -32,6 +33,60 @@ _TRAIN_SUMMARY_FIELDS = (
     'elapsed_sec',
     'peak_vram_gb',
 )
+
+#----------------------------------------------------------------------------
+
+def adaptive_update_interval_nimg(update_kimg):
+    """Convert an adaptive update period to an exact image-count interval."""
+    update_kimg = float(update_kimg)
+    update_nimg = update_kimg * 1000
+    if not math.isfinite(update_kimg) or update_kimg <= 0 or not update_nimg.is_integer():
+        raise ValueError(
+            f'adaptive_update_kimg must be positive and represent whole images, got {update_kimg}'
+        )
+    return int(update_nimg)
+
+
+class AdaptiveSignalWindow:
+    """Accumulate local loss until the next absolute adaptive-update boundary.
+
+    Windows are deliberately independent of maintenance ticks so changing
+    --tick does not change the controller's update frequency.
+    """
+
+    def __init__(self, update_kimg, start_nimg=0):
+        self.update_nimg = adaptive_update_interval_nimg(update_kimg)
+        start_nimg = int(start_nimg)
+        if start_nimg < 0:
+            raise ValueError(f'start_nimg must be non-negative, got {start_nimg}')
+        self.next_update_nimg = (start_nimg // self.update_nimg + 1) * self.update_nimg
+        self.loss_sum = 0.0
+        self.loss_count = 0
+
+    def add(self, loss_sum, loss_count):
+        self.loss_sum += float(loss_sum)
+        self.loss_count += int(loss_count)
+
+    def pop_if_due(self, cur_nimg):
+        cur_nimg = int(cur_nimg)
+        if cur_nimg < self.next_update_nimg:
+            return None
+        loss_sum, loss_count = self.loss_sum, self.loss_count
+        self.loss_sum = 0.0
+        self.loss_count = 0
+        while self.next_update_nimg <= cur_nimg:
+            self.next_update_nimg += self.update_nimg
+        return loss_sum, loss_count
+
+
+def globally_average_adaptive_loss(loss_sum, loss_count, device):
+    """Return the sample-weighted loss mean, identical on every rank."""
+    totals = torch.tensor([loss_sum, loss_count], dtype=torch.float64, device=device)
+    if dist.get_world_size() > 1:
+        torch.distributed.all_reduce(totals)
+    total_count = float(totals[1])
+    return float(totals[0] / total_count) if total_count > 0 else float('nan')
+
 
 #----------------------------------------------------------------------------
 
@@ -140,6 +195,7 @@ def training_loop(
     sample_ticks        = 50,       # How often to sample images, None = disable.
     eval_ticks          = 500,      # How often to evaluate models, None = disable.
     double_ticks        = 500,      # How often to evaluate models, None = disable.
+    adaptive_update_kimg = 0.5,     # Adaptive loss-EMA signal period, independent of ticks.
     resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
     resume_state_dump   = None,     # Start from the given training state, None = reset training state.
     resume_tick         = 0,        # Start from the given training progress.
@@ -304,6 +360,10 @@ def training_loop(
         schedule_name = getattr(loss_fn, 'adj', None)
     if schedule_name is None:
         schedule_name = loss_kwargs.get('adj', 'unknown')
+    adaptive_signal_window = (
+        AdaptiveSignalWindow(adaptive_update_kimg, start_nimg=cur_nimg)
+        if schedule_name == 'adaptive_v1' else None
+    )
 
     if dist.get_rank() == 0:
         summary_path = os.path.join(run_dir, 'train_summary.csv')
@@ -448,7 +508,9 @@ def training_loop(
         if not step_skipped:
             successful_optimizer_steps += 1
 
-        loss_mean = float(torch.cat([x.flatten() for x in loss_batches]).mean().cpu())
+        loss_count = sum(x.numel() for x in loss_batches)
+        loss_sum = sum(float(x.sum().cpu()) for x in loss_batches)
+        loss_mean = loss_sum / loss_count
         elapsed_sec = elapsed_base_sec + (time.time() - start_time)
         peak_vram_gb = torch.cuda.max_memory_allocated(device) / 2**30
         training_stats.report0('Progress/grad_scale', grad_scale)
@@ -467,8 +529,18 @@ def training_loop(
         for p_ema, p_net in zip(ema.parameters(), net.parameters()):
             p_ema.copy_(p_net.detach().lerp(p_ema, ema_beta))
 
-        # Perform maintenance tasks once per tick.
+        # Advance iteration-local state. Adaptive updates intentionally happen
+        # here, before the maintenance early-continue below.
         cur_nimg += batch_size
+        if adaptive_signal_window is not None:
+            adaptive_signal_window.add(loss_sum, loss_count)
+            signal_window = adaptive_signal_window.pop_if_due(cur_nimg)
+            if signal_window is not None:
+                signal_loss = globally_average_adaptive_loss(*signal_window, device=device)
+                if loss_fn.update_training_signal(signal_loss):
+                    schedule_info = loss_fn.schedule_metadata()
+                    training_stats.report('Adaptive/loss_ema', schedule_info['loss_ema'])
+                    training_stats.report('Adaptive/ratio_correction', schedule_info['correction'])
         if train_summary_writer is not None:
             train_summary_writer.writerow({
                 'attempted_iteration': attempted_iteration,
@@ -485,6 +557,7 @@ def training_loop(
             })
             train_summary_csv.flush()
 
+        # Perform maintenance tasks once per tick.
         done = (cur_nimg >= total_kimg * 1000)
         if (not done) and (cur_tick != 0) and (cur_nimg < tick_start_nimg + kimg_per_tick * 1000):
             continue

@@ -168,7 +168,7 @@ class AdaptiveV1Schedule(SigmoidSchedule):
     """
 
     def __init__(self, q=2.0, k=8.0, b=1.0, loss_ema_beta=0.9,
-                 max_adjust=0.05, min_gap=1e-3):
+                 max_adjust=0.05, min_gap=1e-3, warmup_updates=2):
         super().__init__(q=q, k=k, b=b)
         for name, value in [('q', q), ('k', k), ('b', b)]:
             if not math.isfinite(float(value)):
@@ -179,9 +179,17 @@ class AdaptiveV1Schedule(SigmoidSchedule):
             raise ValueError(f'max_adjust must be in [0, 1], got {max_adjust}')
         if not math.isfinite(min_gap) or not 0 < min_gap < 1:
             raise ValueError(f'min_gap must be in (0, 1), got {min_gap}')
+        try:
+            normalized_warmup_updates = int(warmup_updates)
+        except (TypeError, ValueError, OverflowError):
+            normalized_warmup_updates = -1
+        if (isinstance(warmup_updates, bool) or normalized_warmup_updates != warmup_updates
+                or normalized_warmup_updates < 0):
+            raise ValueError(f'warmup_updates must be a non-negative integer, got {warmup_updates}')
         self.loss_ema_beta = float(loss_ema_beta)
         self.max_adjust = float(max_adjust)
         self.min_gap = float(min_gap)
+        self.warmup_updates = normalized_warmup_updates
         self.loss_ema = None
         self.loss_reference = None
         self.signal_updates = 0
@@ -205,7 +213,8 @@ class AdaptiveV1Schedule(SigmoidSchedule):
         return True
 
     def correction(self):
-        if self.max_adjust == 0 or self.loss_ema is None or self.loss_reference is None:
+        if (self.max_adjust == 0 or self.loss_ema is None or self.loss_reference is None
+                or self.signal_updates <= self.warmup_updates):
             return 0.0
         log_improvement = math.log(self.loss_reference) - math.log(self.loss_ema)
         return self.max_adjust * math.tanh(log_improvement)
@@ -267,6 +276,7 @@ class AdaptiveV1Schedule(SigmoidSchedule):
             'k': self.k,
             'b': self.b,
             'loss_ema_beta': self.loss_ema_beta,
+            'warmup_updates': self.warmup_updates,
             'max_adjust': self.max_adjust,
             'min_gap': self.min_gap,
             'loss_ema': self.loss_ema,

@@ -109,6 +109,7 @@ class AdaptiveV1Test(unittest.TestCase):
         baseline = get_schedule('sigmoid', q=2.0)
         adaptive.update_training_signal(10.0)
         adaptive.update_training_signal(5.0)
+        adaptive.update_training_signal(2.5)
         base_r = baseline.compute_r(t=t, stage=2)
         adaptive_r = adaptive.compute_r(t=t, stage=2)
         self.assertTrue((adaptive_r >= base_r).all())
@@ -121,8 +122,17 @@ class AdaptiveV1Test(unittest.TestCase):
         baseline = get_schedule('sigmoid')
         adaptive.update_training_signal(10.0)
         adaptive.update_training_signal(20.0)
+        adaptive.update_training_signal(40.0)
         self.assertLess(adaptive.correction(), 0)
         self.assertTrue((adaptive.compute_r(t=t, stage=2) <= baseline.compute_r(t=t, stage=2)).all())
+
+    def test_warmup_holds_correction_until_configured_updates_complete(self):
+        adaptive = get_schedule('adaptive_v1', loss_ema_beta=0.0, warmup_updates=2)
+        adaptive.update_training_signal(10.0)
+        adaptive.update_training_signal(5.0)
+        self.assertEqual(adaptive.correction(), 0.0)
+        adaptive.update_training_signal(2.5)
+        self.assertGreater(adaptive.correction(), 0.0)
 
     def test_output_is_finite_bounded_and_deterministic(self):
         t = torch.tensor([0.0, 1e-12, 0.1, 1.0, 80.0, float('inf'), float('nan')])
@@ -159,6 +169,9 @@ class AdaptiveV1Test(unittest.TestCase):
             {'loss_ema_beta': 1.0},
             {'max_adjust': -0.1},
             {'min_gap': 0.0},
+            {'warmup_updates': -1},
+            {'warmup_updates': 1.5},
+            {'warmup_updates': float('inf')},
             {'k': float('nan')},
         ]
         for kwargs in invalid_kwargs:
@@ -256,13 +269,14 @@ class ECMLossIntegrationTest(unittest.TestCase):
     def test_adaptive_hyperparams_reach_schedule_metadata(self):
         loss_fn = make_loss(
             'adaptive_v1', adaptive_loss_ema_beta=0.8,
-            adaptive_max_adjust=0.04, adaptive_min_gap=0.002,
+            adaptive_warmup_updates=3, adaptive_max_adjust=0.04, adaptive_min_gap=0.002,
         )
         metadata = loss_fn.schedule_metadata()
         self.assertEqual(metadata['name'], 'adaptive_v1')
         self.assertTrue(metadata['enabled'])
         self.assertEqual(metadata['signal'], 'loss_ema')
         self.assertEqual(metadata['loss_ema_beta'], 0.8)
+        self.assertEqual(metadata['warmup_updates'], 3)
         self.assertEqual(metadata['max_adjust'], 0.04)
         self.assertEqual(metadata['min_gap'], 0.002)
 
@@ -338,7 +352,7 @@ class ECMLossCallCudaTest(unittest.TestCase):
 
     def test_call_adaptive_v1_loss_signal_changes_loss(self):
         baseline = self.full_loss('adaptive_v1', stage=1)
-        adapted = self.full_loss('adaptive_v1', stage=1, losses=(10.0, 5.0))
+        adapted = self.full_loss('adaptive_v1', stage=1, losses=(10.0, 5.0, 2.5))
         self.assertFalse(torch.equal(baseline, adapted))
 
 

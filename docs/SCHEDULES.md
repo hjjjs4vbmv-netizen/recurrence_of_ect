@@ -67,14 +67,20 @@ r     = t * rho
 - `|delta| <= adaptive_max_adjust`，不做搜索或额外控制器；
 - 非有限、负数 loss 信号直接忽略；输出做有限化和边界 clamp，
   保证 `0 <= r <= t`且不产生 NaN/Inf；
-- tick loss 通过现有 `training_stats.Collector` 在所有 rank 上聚合，再更新 EMA，
-  同样输入与状态下各 rank 使用同一修正值。
+- loss 信号每 `adaptive_update_kimg`（默认 0.5 kimg）按**绝对图像数边界**
+  聚合；它在训练迭代内执行，不依赖 `--tick`/maintenance（默认 50 kimg）。
+  每个窗口的 sum/count 以 all-reduce 合并，因此同样输入与状态下各 rank 使用
+  同一修正值。
+- 前 `adaptive_warmup_updates` 个有效聚合窗口只建立 loss EMA；warmup 完成后的
+  下一次更新才允许非零修正。
 
 默认参数只是首版单点配置，不代表完成大范围搜索：
 
 | CLI | 默认值 | 含义 |
 | :-- | --: | :-- |
 | `--adaptive-loss-ema-beta` | `0.9` | loss EMA 平滑系数 |
+| `--adaptive-update-kimg` | `0.5` | 触发一次全局 adaptive loss 聚合的图像间隔；与 `--tick` 独立 |
+| `--adaptive-warmup-updates` | `2` | 应用修正前仅更新 EMA 的有效信号窗口数 |
 | `--adaptive-max-adjust` | `0.05` | `r/t` 最大绝对修正 |
 | `--adaptive-min-gap` | `0.001` | 开启修正时的最小 `(t-r)/t` |
 

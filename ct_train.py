@@ -52,6 +52,7 @@ def make_loss_kwargs(opts):
         b=opts.b,
         adj=opts.mapping,
         adaptive_loss_ema_beta=opts.adaptive_loss_ema_beta,
+        adaptive_warmup_updates=opts.adaptive_warmup_updates,
         adaptive_max_adjust=opts.adaptive_max_adjust,
         adaptive_min_gap=opts.adaptive_min_gap,
     )
@@ -91,6 +92,10 @@ def make_loss_kwargs(opts):
               callback=normalize_schedule_name, default='sigmoid', show_default=True)
 @click.option('--adaptive-loss-ema-beta', help='EMA beta for adaptive_v1 loss signal', metavar='FLOAT',
               type=click.FloatRange(min=0, max=1, max_open=True), default=0.9, show_default=True)
+@click.option('--adaptive-update-kimg', help='Aggregate adaptive_v1 loss signal every KIMG, independent of ticks', metavar='KIMG',
+              type=click.FloatRange(min=0, min_open=True), default=0.5, show_default=True)
+@click.option('--adaptive-warmup-updates', help='Valid adaptive_v1 signal updates before applying corrections', metavar='INT',
+              type=click.IntRange(min=0), default=2, show_default=True)
 @click.option('--adaptive-max-adjust', help='Maximum absolute adaptive_v1 correction to r/t', metavar='FLOAT',
               type=click.FloatRange(min=0, max=1), default=0.05, show_default=True)
 @click.option('--adaptive-min-gap', help='Minimum relative gap (t-r)/t for adaptive_v1', metavar='FLOAT',
@@ -197,7 +202,8 @@ def main(**kwargs):
     c.ema_beta = opts.ema_beta
     c.update(batch_size=opts.batch, batch_gpu=opts.batch_gpu)
     c.update(loss_scaling=opts.ls, cudnn_benchmark=opts.bench, enable_tf32=opts.tf32, enable_amp=opts.enable_amp)
-    c.update(kimg_per_tick=opts.tick, snapshot_ticks=opts.snap, state_dump_ticks=opts.dump, ckpt_ticks=opts.ckpt, double_ticks=opts.double)
+    c.update(kimg_per_tick=opts.tick, snapshot_ticks=opts.snap, state_dump_ticks=opts.dump, ckpt_ticks=opts.ckpt,
+             double_ticks=opts.double, adaptive_update_kimg=opts.adaptive_update_kimg)
     c.update(mid_t=opts.mid_t, metrics=opts.metrics, sample_ticks=opts.sample_every, eval_ticks=opts.eval_every)
 
     # Random seed.
