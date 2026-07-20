@@ -150,6 +150,16 @@ least four attempted iterations remain after that controller update.
 correction first enters `r(t)`. The pair telemetry on the former iteration was
 sampled before the update and must not be described as adapted.
 
+## Recorded activation evidence
+
+[`results/adaptive_v1_activation_a100_cb84a934/`](../results/adaptive_v1_activation_a100_cb84a934/)
+contains a clean single-A100 activation run at
+`cb84a93454a91500d01433dd2d024d775fb275ef`. Its Collector validation passed
+with 32 attempted iterations (4.096 kimg), eight final signal updates, full
+telemetry coverage, and matching final next-loop tick (`2`) between CSV and
+training state. This is controller-activation evidence only, not a paired
+quality, stability, or baseline result.
+
 Automatically records train-time HEAD from `run_meta.env`, packaging-time HEAD,
 dirty status, exact command, asset SHA256 digests, and runtime metadata.
 Packaging fails closed unless train-time and packaging HEADs match, and unless
