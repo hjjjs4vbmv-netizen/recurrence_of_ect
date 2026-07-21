@@ -1,12 +1,11 @@
-# Sigmoid stability — clean A100 paired evidence
+# Sigmoid stability — canonical A100 paired evidence (fresh 16 kimg)
 
 This directory records the clean single-GPU `sigmoid` stability arm of the
 Role B paired campaign at commit
-`5344a5c97ab461b640ad5c5413cbf57eec527c2a`, run against the canonical CIFAR-10
-archive `08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372`.
-It is the fixed-schedule counterpart to
-`results/adaptive_v1_stability_a100_5344a5c9/`; it is engineering stability
-evidence, not a final quality baseline.
+`5344a5c97ab461b640ad5c5413cbf57eec527c2a`, rerun in the Role A frozen
+`ect-clean-validation` runtime (Python 3.9.18 / PyTorch 2.3.0 / CUDA 12.1)
+against canonical dataset `08c9ed1b2b1c…` and transfer `4d5dcc1f1d0d…`.
+Counterpart: `results/adaptive_v1_stability_a100_5344a5c9/`. Intent: independent fresh 16 kimg stability evidence (not an activation→stability resume).
 
 ## Status
 
@@ -14,7 +13,7 @@ evidence, not a final quality baseline.
 | --- | --- |
 | Evidence class | `formal_candidate` |
 | Device | NVIDIA A100-PCIE-40GB (1 GPU) |
-| Runtime | Python 3.12.4 / PyTorch 2.3.1+cu121 / CUDA 12.1 |
+| Runtime | Python 3.9.18 / PyTorch 2.3.0 / CUDA 12.1 (`ect-clean-validation`) |
 | Mode / schedule | `stability` / `sigmoid` |
 | Duration / progress | 0.016 Mimg / 16.0 kimg |
 | Dataset archive SHA-256 | `08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372` (canonical) |
@@ -24,13 +23,14 @@ evidence, not a final quality baseline.
 | AMP | enabled; GradScaler state saved |
 | Recorded training and packaging worktrees | clean, at `5344a5c…` |
 | Loss finiteness | 0 NaN / 0 Inf in `train_summary.csv` |
+| Run outdir | `/root/ect-runs/paired-training-v1-canonical/sigmoid-stability-5344a5c9-20260721T034603Z` |
 
-The Collector loaded both the latest network snapshot and training state.
-Controller telemetry remains inactive for the fixed arm (`signal_updates=0`).
+**Fresh run (not resume):** `exact_command` uses `--transfer=...` and
+`--duration=0.016` with no `--resume`. This is an independent fresh 16 kimg
+stability arm, not a continuation of the activation training-state.
 
-The console's initial maintenance report can display `loss nan` before the
-statistics collector is updated. The packaged CSV records finite losses, and
-the Collector's `nan_count` and `inf_count` are both zero.
+The Collector loaded the latest network snapshot and training state.
+Controller telemetry stays inactive for the fixed arm.
 
 ## Contents
 
@@ -42,12 +42,11 @@ results/sigmoid_stability_a100_5344a5c9/
 ```
 
 The checkpoint, network snapshot, raw log, source dataset, and transfer pickle
-remain outside Git. `metadata.json` records their original paths and SHA-256
-digests where applicable.
+remain outside Git. See also `results/paired_comparison_a100_5344a5c9.{md,json}`.
 
 ## Local artifact hashes
 
 ```text
-dcb58e400371ffe11c7460c07460d535c7f9073de12a57a85c7bdd99011e6a48  metadata.json
-f75def37fff9072600d863fe8bb89f0710d7bab8932ad55c24957ea340bee176  train_summary.csv
+21d22991acec8e4874ea5ad3b19ce6ed286e8fd3868ea65880de2496dd61de63  metadata.json
+ec86295aaca42c7db06d222f647fe1fe429b1911f36d9874ae98ae6e3b8b819e  train_summary.csv
 ```
