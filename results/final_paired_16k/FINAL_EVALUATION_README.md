@@ -5,7 +5,8 @@
 - Mode: `validate`
 - Verification status: `VERIFIED`
 - Training commit: `5344a5c97ab461b640ad5c5413cbf57eec527c2a`
-- Evidence/evaluation commit: `ef4aa3142eb2049bd5d541d18d7278cdf758029c`
+- Evaluation code commit: `ef4aa3142eb2049bd5d541d18d7278cdf758029c`
+- Initial evidence packaging commit: `9617942166154dc8a91f6070073fa868ca9ac3da`
 - Evaluation environment: `ect-clean-validation`
 - Runtime: Python 3.9.18, PyTorch 2.3.0, CUDA 12.1
 - GPU: NVIDIA A100-PCIE-40GB
@@ -51,7 +52,7 @@ Independent post-run validation confirmed:
 - both seed lists are exactly `0-63`, with no missing or duplicate seeds;
 - all 256 individual outputs are RGB 32×32 PNGs;
 - all four method/NFE groups contain exactly 64 images;
-- both 8×8 grids are RGB 256×256 images;
+- all four 8×8 method grids are RGB 256×256 images;
 - each result manifest contains exactly 128 individual images, two grids, and
   one metadata file;
 - every manifest entry matches the corresponding persistent file;
