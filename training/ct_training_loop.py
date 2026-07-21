@@ -2,9 +2,12 @@ import os
 import csv
 import time
 import copy
+import filecmp
 import json
+import math
 import pickle
 import psutil
+import shutil
 import functools
 import PIL.Image
 import numpy as np
@@ -17,9 +20,8 @@ from torch_utils import misc
 from metrics import metric_main
 
 # Per-attempted-iteration CSV for paired fixed/adaptive comparisons.
-# schedule / stage are recorded every row so collectors do not scrape logs.
-# Adaptive-only columns (loss_ema, correction, ...) are added by Role C later.
-_TRAIN_SUMMARY_FIELDS = (
+# Schedule telemetry comes exclusively from loss_fn.schedule_runtime_metrics().
+_LEGACY_TRAIN_SUMMARY_FIELDS = (
     'attempted_iteration',
     'successful_optimizer_steps',
     'processed_nimg',
@@ -32,6 +34,264 @@ _TRAIN_SUMMARY_FIELDS = (
     'elapsed_sec',
     'peak_vram_gb',
 )
+
+# The telemetry schema predating next_loop_cur_tick. Keep this exact tuple so
+# resumed runs can be migrated without guessing historical tick state.
+_PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS = (
+    'attempted_iteration',
+    'successful_optimizer_steps',
+    'processed_nimg',
+    'processed_kimg',
+    'loss',
+    'grad_scale',
+    'step_skipped',
+    'schedule',
+    'stage',
+    'loss_ema',
+    'loss_reference',
+    'correction',
+    'signal_updates',
+    'adaptive_active',
+    'r_over_t_mean',
+    'gap_mean',
+    'elapsed_sec',
+    'peak_vram_gb',
+)
+
+_TRAIN_SUMMARY_FIELDS = (
+    'attempted_iteration',
+    'successful_optimizer_steps',
+    'processed_nimg',
+    'processed_kimg',
+    'loss',
+    'grad_scale',
+    'step_skipped',
+    'schedule',
+    'stage',
+    # The state that will be used by the next loop iteration. At a
+    # maintenance boundary this is also the cur_tick persisted in a checkpoint.
+    'next_loop_cur_tick',
+    'loss_ema',
+    'loss_reference',
+    'correction',
+    'signal_updates',
+    'adaptive_active',
+    'r_over_t_mean',
+    'gap_mean',
+    'elapsed_sec',
+    'peak_vram_gb',
+)
+
+#----------------------------------------------------------------------------
+
+def load_and_migrate_train_summary(summary_path):
+    """Load a resume CSV, upgrading only known historical schemas.
+
+    Values absent from the original schema cannot be reconstructed, so their
+    migrated cells deliberately stay empty. The original file is retained
+    beside the upgraded CSV for auditability.
+    """
+    with open(summary_path, 'rt', newline='') as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = tuple(reader.fieldnames or ())
+        rows = list(reader)
+
+    if not rows:
+        raise RuntimeError(f'resume requested but {summary_path} has no data rows')
+    if fieldnames == _TRAIN_SUMMARY_FIELDS:
+        return rows, None
+    if fieldnames == _LEGACY_TRAIN_SUMMARY_FIELDS:
+        backup_path = f'{summary_path}.pre-telemetry.bak'
+    elif fieldnames == _PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS:
+        backup_path = f'{summary_path}.pre-next-loop-tick.bak'
+    else:
+        raise RuntimeError(
+            f'resume requested but {summary_path} has an unsupported schema; '
+            'expected the current schema or an exact supported legacy schema'
+        )
+
+    if os.path.exists(backup_path):
+        if not filecmp.cmp(summary_path, backup_path, shallow=False):
+            raise RuntimeError(
+                f'refuse to overwrite non-matching train-summary backup: {backup_path}'
+            )
+    else:
+        shutil.copy2(summary_path, backup_path)
+
+    migrated_rows = [
+        {field: row.get(field, '') for field in _TRAIN_SUMMARY_FIELDS}
+        for row in rows
+    ]
+    temporary_path = f'{summary_path}.telemetry-migration.tmp-{os.getpid()}'
+    try:
+        with open(temporary_path, 'wt', newline='') as handle:
+            writer = csv.DictWriter(handle, fieldnames=_TRAIN_SUMMARY_FIELDS)
+            writer.writeheader()
+            writer.writerows(migrated_rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, summary_path)
+    except BaseException:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+        raise
+    return migrated_rows, backup_path
+
+#----------------------------------------------------------------------------
+
+def adaptive_update_interval_nimg(update_kimg):
+    """Convert an adaptive update period to an exact image-count interval."""
+    update_kimg = float(update_kimg)
+    update_nimg = update_kimg * 1000
+    if not math.isfinite(update_kimg) or update_kimg <= 0 or not update_nimg.is_integer():
+        raise ValueError(
+            f'adaptive_update_kimg must be positive and represent whole images, got {update_kimg}'
+        )
+    return int(update_nimg)
+
+
+class AdaptiveSignalWindow:
+    """Accumulate local loss until the next absolute adaptive-update boundary.
+
+    Windows are deliberately independent of maintenance ticks so changing
+    --tick does not change the controller's update frequency.
+    """
+
+    def __init__(self, update_kimg, start_nimg=0):
+        self.update_nimg = adaptive_update_interval_nimg(update_kimg)
+        start_nimg = int(start_nimg)
+        if start_nimg < 0:
+            raise ValueError(f'start_nimg must be non-negative, got {start_nimg}')
+        self.next_update_nimg = (start_nimg // self.update_nimg + 1) * self.update_nimg
+        self.loss_sum = 0.0
+        self.loss_count = 0
+
+    def add(self, loss_sum, loss_count):
+        self.loss_sum += float(loss_sum)
+        self.loss_count += int(loss_count)
+
+    def pop_if_due(self, cur_nimg):
+        cur_nimg = int(cur_nimg)
+        if cur_nimg < self.next_update_nimg:
+            return None
+        loss_sum, loss_count = self.loss_sum, self.loss_count
+        self.loss_sum = 0.0
+        self.loss_count = 0
+        while self.next_update_nimg <= cur_nimg:
+            self.next_update_nimg += self.update_nimg
+        return loss_sum, loss_count
+
+    def state_dict(self):
+        """Return all state needed to resume a partially accumulated window."""
+        return {
+            'update_nimg': self.update_nimg,
+            'next_update_nimg': self.next_update_nimg,
+            'loss_sum': self.loss_sum,
+            'loss_count': self.loss_count,
+        }
+
+    def load_state_dict(self, state):
+        """Restore a window checkpointed after an arbitrary training step."""
+        if not isinstance(state, dict):
+            raise ValueError('adaptive signal window state must be a dict')
+        required = ('update_nimg', 'next_update_nimg', 'loss_sum', 'loss_count')
+        missing = [name for name in required if name not in state]
+        if missing:
+            raise ValueError(
+                f'adaptive signal window state missing required fields: {", ".join(missing)}'
+            )
+        update_nimg = int(state['update_nimg'])
+        next_update_nimg = int(state['next_update_nimg'])
+        loss_sum = float(state['loss_sum'])
+        loss_count = int(state['loss_count'])
+        if update_nimg != self.update_nimg:
+            raise ValueError(
+                f'adaptive signal window interval mismatch: checkpoint={update_nimg}, '
+                f'current={self.update_nimg}'
+            )
+        if next_update_nimg <= 0 or next_update_nimg % self.update_nimg != 0:
+            raise ValueError(
+                f'invalid adaptive signal window next_update_nimg: {next_update_nimg}'
+            )
+        if loss_count < 0:
+            raise ValueError(f'adaptive signal window loss_count must be non-negative, got {loss_count}')
+        self.next_update_nimg = next_update_nimg
+        self.loss_sum = loss_sum
+        self.loss_count = loss_count
+
+
+def gather_adaptive_signal_window_state(window, device):
+    """Collect each rank's local adaptive-window state for a rank-0 checkpoint."""
+    local_state = window.state_dict()
+    world_size = dist.get_world_size()
+    if world_size == 1:
+        rank_states = [local_state]
+    else:
+        local_values = torch.tensor(
+            [window.next_update_nimg, window.loss_sum, window.loss_count],
+            dtype=torch.float64,
+            device=device,
+        )
+        gathered_values = [torch.empty_like(local_values) for _ in range(world_size)]
+        torch.distributed.all_gather(gathered_values, local_values)
+        rank_states = [
+            {
+                'update_nimg': window.update_nimg,
+                'next_update_nimg': int(values[0]),
+                'loss_sum': float(values[1]),
+                'loss_count': int(values[2]),
+            }
+            for values in gathered_values
+        ]
+
+    # Keep the rank-0 fields at the top level for transparent single-rank
+    # inspection, and retain every local accumulator for exact DDP resumes.
+    return {**rank_states[0], 'rank_states': rank_states}
+
+
+def local_adaptive_signal_window_state(state):
+    """Select this rank's window state from a training-state checkpoint."""
+    if not isinstance(state, dict):
+        return state
+    rank_states = state.get('rank_states')
+    if rank_states is None:
+        return state
+    if not isinstance(rank_states, list) or len(rank_states) != dist.get_world_size():
+        raise ValueError(
+            'adaptive signal window checkpoint rank count does not match the current world size'
+        )
+    return rank_states[dist.get_rank()]
+
+
+def globally_average_adaptive_loss(loss_sum, loss_count, device):
+    """Return the sample-weighted loss mean, identical on every rank."""
+    totals = torch.tensor([loss_sum, loss_count], dtype=torch.float64, device=device)
+    if dist.get_world_size() > 1:
+        torch.distributed.all_reduce(totals)
+    total_count = float(totals[1])
+    return float(totals[0] / total_count) if total_count > 0 else float('nan')
+
+
+def globally_average_runtime_pairs(metric_batches, device):
+    """Average public r/t telemetry across accumulation rounds and ranks."""
+    r_values = [float(metrics['r_over_t_mean']) for metrics in metric_batches]
+    gap_values = [float(metrics['gap_mean']) for metrics in metric_batches]
+    r_values = [value for value in r_values if math.isfinite(value)]
+    gap_values = [value for value in gap_values if math.isfinite(value)]
+    totals = torch.tensor(
+        [sum(r_values), len(r_values), sum(gap_values), len(gap_values)],
+        dtype=torch.float64,
+        device=device,
+    )
+    if dist.get_world_size() > 1:
+        torch.distributed.all_reduce(totals)
+    r_count = float(totals[1])
+    gap_count = float(totals[3])
+    return {
+        'r_over_t_mean': float(totals[0] / r_count) if r_count > 0 else float('nan'),
+        'gap_mean': float(totals[2] / gap_count) if gap_count > 0 else float('nan'),
+    }
+
 
 #----------------------------------------------------------------------------
 
@@ -140,6 +400,7 @@ def training_loop(
     sample_ticks        = 50,       # How often to sample images, None = disable.
     eval_ticks          = 500,      # How often to evaluate models, None = disable.
     double_ticks        = 500,      # How often to evaluate models, None = disable.
+    adaptive_update_kimg = 0.5,     # Adaptive loss-EMA signal period, independent of ticks.
     resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
     resume_state_dump   = None,     # Start from the given training state, None = reset training state.
     resume_tick         = 0,        # Start from the given training progress.
@@ -225,6 +486,7 @@ def training_loop(
     resumed_cur_nimg = None
     resumed_cur_tick = None
     resumed_tick_start_nimg = None
+    resumed_adaptive_signal_window_state = None
     elapsed_base_sec = 0.0
     if resume_state_dump:
         dist.print0(f'Loading training state from "{resume_state_dump}"...')
@@ -246,6 +508,8 @@ def training_loop(
         elapsed_base_sec = float(data.get('elapsed_sec', 0.0))
         if hasattr(loss_fn, 'load_schedule_state_dict') and 'loss_fn_state' in data:
             loss_fn.load_schedule_state_dict(data['loss_fn_state'])
+        if 'adaptive_signal_window_state' in data:
+            resumed_adaptive_signal_window_state = data['adaptive_signal_window_state']
         if enable_amp:
             if 'gradscaler_state' in data:
                 # NOTE(aiihn): Although not loading the state_dict of the GradScaler works well,
@@ -304,16 +568,36 @@ def training_loop(
         schedule_name = getattr(loss_fn, 'adj', None)
     if schedule_name is None:
         schedule_name = loss_kwargs.get('adj', 'unknown')
+    adaptive_signal_window = (
+        AdaptiveSignalWindow(adaptive_update_kimg, start_nimg=cur_nimg)
+        if schedule_name == 'adaptive_v1' else None
+    )
+    if adaptive_signal_window is not None and resume_state_dump:
+        if resumed_adaptive_signal_window_state is None:
+            raise RuntimeError(
+                f'resume training-state missing adaptive_signal_window_state: {resume_state_dump}; '
+                'cannot exactly resume adaptive loss aggregation'
+            )
+        adaptive_signal_window.load_state_dict(
+            local_adaptive_signal_window_state(resumed_adaptive_signal_window_state)
+        )
+        if adaptive_signal_window.next_update_nimg <= cur_nimg:
+            raise RuntimeError(
+                'resumed adaptive signal window is due before or at the restored progress: '
+                f'{adaptive_signal_window.next_update_nimg} <= {cur_nimg}'
+            )
 
     if dist.get_rank() == 0:
         summary_path = os.path.join(run_dir, 'train_summary.csv')
         summary_exists = os.path.isfile(summary_path) and os.path.getsize(summary_path) > 0
         if resume_state_dump:
             if summary_exists:
-                with open(summary_path, 'rt', newline='') as handle:
-                    rows = list(csv.DictReader(handle))
-                if not rows:
-                    raise RuntimeError(f'resume requested but {summary_path} has no data rows')
+                rows, migrated_backup = load_and_migrate_train_summary(summary_path)
+                if migrated_backup is not None:
+                    dist.print0(
+                        f'Migrated legacy train_summary.csv to telemetry schema; '
+                        f'original saved as "{migrated_backup}"'
+                    )
                 last = rows[-1]
                 last_attempted = int(float(last['attempted_iteration']))
                 last_nimg = int(float(last.get('processed_nimg', last.get('nimg', -1))))
@@ -333,6 +617,29 @@ def training_loop(
                         f'train_summary.csv last processed_nimg={last_nimg} '
                         f'does not match resumed cur_nimg={cur_nimg}'
                     )
+                last_next_loop_tick = str(last.get('next_loop_cur_tick', '')).strip()
+                if last_next_loop_tick:
+                    try:
+                        parsed_next_loop_tick = float(last_next_loop_tick)
+                    except ValueError as exc:
+                        raise RuntimeError(
+                            'train_summary.csv last next_loop_cur_tick must be numeric: '
+                            f'{last_next_loop_tick!r}'
+                        ) from exc
+                    if (
+                        not math.isfinite(parsed_next_loop_tick)
+                        or not parsed_next_loop_tick.is_integer()
+                        or parsed_next_loop_tick < 0
+                    ):
+                        raise RuntimeError(
+                            'train_summary.csv last next_loop_cur_tick must be a '
+                            f'non-negative integer: {last_next_loop_tick!r}'
+                        )
+                    if int(parsed_next_loop_tick) != cur_tick:
+                        raise RuntimeError(
+                            f'train_summary.csv last next_loop_cur_tick={last_next_loop_tick} '
+                            f'does not match resumed cur_tick={cur_tick}'
+                        )
                 if not attempted_iteration:
                     attempted_iteration = last_attempted
                     successful_optimizer_steps = int(float(
@@ -361,7 +668,7 @@ def training_loop(
         loss_fn.update_schedule(stage)
         dist.print0(f'Update scheduler at {cur_tick} ticks, {cur_nimg / 1e3} kimg, ratio {loss_fn.ratio}')
 
-    def build_training_state():
+    def build_training_state(adaptive_signal_window_state=None):
         # Checkpointing happens during maintenance, before the loop advances:
         #   cur_tick += 1
         #   tick_start_nimg = cur_nimg
@@ -374,10 +681,17 @@ def training_loop(
             cur_nimg=cur_nimg,
             cur_tick=cur_tick + 1,
             tick_start_nimg=cur_nimg,
-            elapsed_sec=elapsed_base_sec + (time.time() - start_time),
+            # Match the final CSV row exactly; resume timing continues from
+            # the last completed attempted iteration rather than from later
+            # checkpoint I/O and maintenance work.
+            elapsed_sec=elapsed_sec,
         )
         if hasattr(loss_fn, 'schedule_state_dict'):
             data['loss_fn_state'] = loss_fn.schedule_state_dict()
+        if adaptive_signal_window is not None:
+            if adaptive_signal_window_state is None:
+                raise RuntimeError('adaptive signal window state was not collected for checkpointing')
+            data['adaptive_signal_window_state'] = adaptive_signal_window_state
         if enable_amp:
             data['gradscaler_state'] = scaler.state_dict()
         return data
@@ -400,6 +714,7 @@ def training_loop(
         # Accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
         loss_batches = []
+        schedule_metric_batches = []
         for round_idx in range(num_accumulation_rounds):
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
                 images, labels = next(dataset_iterator)
@@ -408,6 +723,7 @@ def training_loop(
 
                 loss = loss_fn(net=ddp, images=images, labels=labels, augment_pipe=augment_pipe)
                 loss_batches.append(loss.detach())
+                schedule_metric_batches.append(loss_fn.schedule_runtime_metrics())
                 training_stats.report('Loss/loss', loss)
                 if enable_amp:
                     scaler.scale(loss.mean()).backward()
@@ -448,7 +764,10 @@ def training_loop(
         if not step_skipped:
             successful_optimizer_steps += 1
 
-        loss_mean = float(torch.cat([x.flatten() for x in loss_batches]).mean().cpu())
+        loss_count = sum(x.numel() for x in loss_batches)
+        loss_sum = sum(float(x.sum().cpu()) for x in loss_batches)
+        loss_mean = loss_sum / loss_count
+        runtime_pair_metrics = globally_average_runtime_pairs(schedule_metric_batches, device=device)
         elapsed_sec = elapsed_base_sec + (time.time() - start_time)
         peak_vram_gb = torch.cuda.max_memory_allocated(device) / 2**30
         training_stats.report0('Progress/grad_scale', grad_scale)
@@ -467,8 +786,40 @@ def training_loop(
         for p_ema, p_net in zip(ema.parameters(), net.parameters()):
             p_ema.copy_(p_net.detach().lerp(p_ema, ema_beta))
 
-        # Perform maintenance tasks once per tick.
+        # Advance iteration-local state. Adaptive updates intentionally happen
+        # here, before the maintenance early-continue below.
         cur_nimg += batch_size
+        if adaptive_signal_window is not None:
+            adaptive_signal_window.add(loss_sum, loss_count)
+            signal_window = adaptive_signal_window.pop_if_due(cur_nimg)
+            if signal_window is not None:
+                signal_loss = globally_average_adaptive_loss(*signal_window, device=device)
+                loss_fn.update_training_signal(signal_loss)
+
+        schedule_runtime_metrics = loss_fn.schedule_runtime_metrics()
+        schedule_runtime_metrics.update(runtime_pair_metrics)
+        if schedule_runtime_metrics['loss_ema'] is not None:
+            training_stats.report0('Schedule/loss_ema', schedule_runtime_metrics['loss_ema'])
+        if schedule_runtime_metrics['loss_reference'] is not None:
+            training_stats.report0('Schedule/loss_reference', schedule_runtime_metrics['loss_reference'])
+        training_stats.report0('Schedule/correction', schedule_runtime_metrics['correction'])
+        training_stats.report0('Schedule/signal_updates', schedule_runtime_metrics['signal_updates'])
+        training_stats.report0('Schedule/adaptive_active', int(schedule_runtime_metrics['adaptive_active']))
+        training_stats.report0('Schedule/r_over_t_mean', schedule_runtime_metrics['r_over_t_mean'])
+        training_stats.report0('Schedule/gap_mean', schedule_runtime_metrics['gap_mean'])
+
+        # Record the exact state that the following loop iteration will see.
+        # This cannot be derived reliably from image count: the first iteration
+        # always performs maintenance, and completion forces it regardless of
+        # --tick. A checkpoint saved below persists this same cur_tick value.
+        done = (cur_nimg >= total_kimg * 1000)
+        maintenance_due = (
+            done
+            or cur_tick == 0
+            or cur_nimg >= tick_start_nimg + kimg_per_tick * 1000
+        )
+        next_loop_cur_tick = cur_tick + int(maintenance_due)
+
         if train_summary_writer is not None:
             train_summary_writer.writerow({
                 'attempted_iteration': attempted_iteration,
@@ -480,13 +831,21 @@ def training_loop(
                 'step_skipped': step_skipped,
                 'schedule': schedule_name,
                 'stage': stage,
+                'next_loop_cur_tick': next_loop_cur_tick,
+                'loss_ema': '' if schedule_runtime_metrics['loss_ema'] is None else f"{schedule_runtime_metrics['loss_ema']:.12g}",
+                'loss_reference': '' if schedule_runtime_metrics['loss_reference'] is None else f"{schedule_runtime_metrics['loss_reference']:.12g}",
+                'correction': f"{schedule_runtime_metrics['correction']:.12g}",
+                'signal_updates': schedule_runtime_metrics['signal_updates'],
+                'adaptive_active': int(schedule_runtime_metrics['adaptive_active']),
+                'r_over_t_mean': f"{schedule_runtime_metrics['r_over_t_mean']:.12g}",
+                'gap_mean': f"{schedule_runtime_metrics['gap_mean']:.12g}",
                 'elapsed_sec': f'{elapsed_sec:.6f}',
                 'peak_vram_gb': f'{peak_vram_gb:.6f}',
             })
             train_summary_csv.flush()
 
-        done = (cur_nimg >= total_kimg * 1000)
-        if (not done) and (cur_tick != 0) and (cur_nimg < tick_start_nimg + kimg_per_tick * 1000):
+        # Perform maintenance tasks once per tick.
+        if not maintenance_due:
             continue
 
         # Print status line, accumulating the same information in training_stats.
@@ -527,12 +886,32 @@ def training_loop(
                     pickle.dump(data, f)
             del data # conserve memory
 
-        # Save full dump of the training state.
-        if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
-            torch.save(build_training_state(), os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'))
+        # Save full dump of the training state. Every rank participates in
+        # collecting its local adaptive-loss accumulator; rank 0 writes the
+        # resulting combined state.
+        state_dump_due = (
+            (state_dump_ticks is not None)
+            and (done or cur_tick % state_dump_ticks == 0)
+            and cur_tick != 0
+        )
+        if state_dump_due:
+            adaptive_signal_window_state = (
+                gather_adaptive_signal_window_state(adaptive_signal_window, device)
+                if adaptive_signal_window is not None else None
+            )
+            if dist.get_rank() == 0:
+                torch.save(
+                    build_training_state(adaptive_signal_window_state),
+                    os.path.join(run_dir, f'training-state-{cur_tick:06d}.pt'),
+                )
 
         # Save latest checkpoints
-        if (ckpt_ticks is not None) and (done or cur_tick % ckpt_ticks == 0) and cur_tick != 0:
+        latest_checkpoint_due = (
+            (ckpt_ticks is not None)
+            and (done or cur_tick % ckpt_ticks == 0)
+            and cur_tick != 0
+        )
+        if latest_checkpoint_due:
             dist.print0(f'Save the latest checkpoint at {cur_tick:06d} img...')
             data = dict(ema=ema, loss_fn=loss_fn, augment_pipe=augment_pipe, dataset_kwargs=dict(dataset_kwargs))
             for key, value in data.items():
@@ -546,8 +925,15 @@ def training_loop(
                     pickle.dump(data, f)
             del data # conserve memory
 
+            adaptive_signal_window_state = (
+                gather_adaptive_signal_window_state(adaptive_signal_window, device)
+                if adaptive_signal_window is not None else None
+            )
             if dist.get_rank() == 0:
-                torch.save(build_training_state(), os.path.join(run_dir, f'training-state-latest.pt'))
+                torch.save(
+                    build_training_state(adaptive_signal_window_state),
+                    os.path.join(run_dir, f'training-state-latest.pt'),
+                )
 
         # Sample Img
         if (sample_ticks is not None) and (done or cur_tick % sample_ticks == 0) and dist.get_rank() == 0:

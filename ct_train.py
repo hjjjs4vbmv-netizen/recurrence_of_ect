@@ -36,6 +36,27 @@ class CommaSeparatedList(click.ParamType):
             return []
         return value.split(',')
 
+
+def normalize_schedule_name(_ctx, _param, value):
+    return 'adaptive_v1' if value == 'adaptive-v1' else value
+
+
+def make_loss_kwargs(opts):
+    """Build the persisted loss/schedule config without renaming legacy keys."""
+    return dnnlib.EasyDict(
+        P_mean=opts.mean,
+        P_std=opts.std,
+        q=opts.q,
+        c=opts.c,
+        k=opts.k,
+        b=opts.b,
+        adj=opts.mapping,
+        adaptive_loss_ema_beta=opts.adaptive_loss_ema_beta,
+        adaptive_warmup_updates=opts.adaptive_warmup_updates,
+        adaptive_max_adjust=opts.adaptive_max_adjust,
+        adaptive_min_gap=opts.adaptive_min_gap,
+    )
+
 #----------------------------------------------------------------------------
 
 @click.command()
@@ -65,10 +86,23 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mean',          help='P_mean of Log Normal Distribution', metavar='FLOAT',         type=click.FloatRange(), default=-1.1, show_default=True)
 @click.option('--std',           help='P_std of Log Normal Distribution', metavar='FLOAT',          type=click.FloatRange(), default=2.0, show_default=True)
 
-@click.option('--mapping',       help='Type of mapping fn', metavar='STR',                          type=click.Choice(['const', 'sigmoid']), default='sigmoid', show_default=True)
+@click.option('--schedule', '--mapping', 'mapping',
+              help='Type of t-to-r schedule; --mapping is a compatibility alias', metavar='STR',
+              type=click.Choice(['const', 'sigmoid', 'adaptive_v1', 'adaptive-v1']),
+              callback=normalize_schedule_name, default='sigmoid', show_default=True)
+@click.option('--adaptive-loss-ema-beta', help='EMA beta for adaptive_v1 loss signal', metavar='FLOAT',
+              type=click.FloatRange(min=0, max=1, max_open=True), default=0.9, show_default=True)
+@click.option('--adaptive-update-kimg', help='Aggregate adaptive_v1 loss signal every KIMG, independent of ticks', metavar='KIMG',
+              type=click.FloatRange(min=0, min_open=True), default=0.5, show_default=True)
+@click.option('--adaptive-warmup-updates', help='Valid adaptive_v1 signal updates before applying corrections', metavar='INT',
+              type=click.IntRange(min=0), default=2, show_default=True)
+@click.option('--adaptive-max-adjust', help='Maximum absolute adaptive_v1 correction to r/t', metavar='FLOAT',
+              type=click.FloatRange(min=0, max=1), default=0.05, show_default=True)
+@click.option('--adaptive-min-gap', help='Minimum relative gap (t-r)/t for adaptive_v1', metavar='FLOAT',
+              type=click.FloatRange(min=0, max=1, min_open=True, max_open=True), default=1e-3, show_default=True)
 @click.option('--double',        help='How often to reduce dt', metavar='TICKS',                    type=click.IntRange(min=1), default=500, show_default=True)
 
-@click.option('-q',              help='Decay Factor', metavar='FLOAT',                              type=click.FloatRange(min=0, min_open=True), default=2.0, show_default=True)
+@click.option('-q',              help='Decay Factor', metavar='FLOAT',                              type=click.FloatRange(min=1, min_open=True), default=2.0, show_default=True)
 @click.option('-k',              help='Mapping fn hyperparams', metavar='FLOAT',                    type=click.FloatRange(), default=8.0, show_default=True)
 @click.option('-b',              help='Mapping fn hyperparams', metavar='FLOAT',                    type=click.FloatRange(), default=1.0, show_default=True)
 
@@ -118,7 +152,7 @@ def main(**kwargs):
     c.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=opts.data, use_labels=opts.cond, xflip=opts.xflip, cache=opts.cache)
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=opts.workers, prefetch_factor=2)
     c.network_kwargs = dnnlib.EasyDict()
-    c.loss_kwargs = dnnlib.EasyDict(P_mean=opts.mean, P_std=opts.std, q=opts.q, c=opts.c, k=opts.k, b=opts.b, adj=opts.mapping)
+    c.loss_kwargs = make_loss_kwargs(opts)
     c.optimizer_kwargs = dnnlib.EasyDict(class_name=f'torch.optim.{opts.optim}', lr=opts.lr, betas=[0.9,0.999], eps=1e-8)
 
     # Validate dataset options.
@@ -168,7 +202,8 @@ def main(**kwargs):
     c.ema_beta = opts.ema_beta
     c.update(batch_size=opts.batch, batch_gpu=opts.batch_gpu)
     c.update(loss_scaling=opts.ls, cudnn_benchmark=opts.bench, enable_tf32=opts.tf32, enable_amp=opts.enable_amp)
-    c.update(kimg_per_tick=opts.tick, snapshot_ticks=opts.snap, state_dump_ticks=opts.dump, ckpt_ticks=opts.ckpt, double_ticks=opts.double)
+    c.update(kimg_per_tick=opts.tick, snapshot_ticks=opts.snap, state_dump_ticks=opts.dump, ckpt_ticks=opts.ckpt,
+             double_ticks=opts.double, adaptive_update_kimg=opts.adaptive_update_kimg)
     c.update(mid_t=opts.mid_t, metrics=opts.metrics, sample_ticks=opts.sample_every, eval_ticks=opts.eval_every)
 
     # Random seed.

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import subprocess
 import sys
@@ -34,6 +35,8 @@ def write_minimal_run(
     git_head: str | None = None,
     data_path: Path | None = None,
     transfer_path: Path | None = None,
+    include_telemetry: bool = False,
+    next_loop_cur_tick: int = 2,
 ) -> None:
     import hashlib
     import math
@@ -90,9 +93,7 @@ def write_minimal_run(
     nimg = int(round(kimg * 1000))
     loss = "nan" if include_nan else "1.25"
     with (run_dir / "train_summary.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
+        fieldnames = [
                 "attempted_iteration",
                 "successful_optimizer_steps",
                 "processed_nimg",
@@ -102,13 +103,23 @@ def write_minimal_run(
                 "step_skipped",
                 "schedule",
                 "stage",
+                "next_loop_cur_tick",
                 "elapsed_sec",
                 "peak_vram_gb",
-            ],
-        )
+            ]
+        if include_telemetry:
+            fieldnames += [
+                "loss_ema",
+                "loss_reference",
+                "correction",
+                "signal_updates",
+                "adaptive_active",
+                "r_over_t_mean",
+                "gap_mean",
+            ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerow(
-            {
+        row = {
                 "attempted_iteration": 1,
                 "successful_optimizer_steps": 1,
                 "processed_nimg": nimg,
@@ -118,14 +129,124 @@ def write_minimal_run(
                 "step_skipped": 0,
                 "schedule": schedule,
                 "stage": 0,
+                "next_loop_cur_tick": next_loop_cur_tick,
                 "elapsed_sec": "1.0",
                 "peak_vram_gb": "1.5",
             }
-        )
+        if include_telemetry:
+            row.update(
+                loss_ema="0.8",
+                loss_reference="1.0",
+                correction="0.02",
+                signal_updates="3",
+                adaptive_active="1",
+                r_over_t_mean="0.75",
+                gap_mean="0.25",
+            )
+        writer.writerow(row)
 
     (run_dir / "network-snapshot-latest.pkl").write_bytes(b"not-a-real-pickle")
     # Minimal torch-free stand-in; collector tests skip torch.load via flag.
     (run_dir / "training-state-latest.pt").write_bytes(b"not-a-real-state")
+
+
+def write_collector_training_state(
+    run_dir: Path,
+    *,
+    schedule: str,
+    cur_nimg: int = 16_000,
+    attempted_iteration: int = 1,
+    successful_optimizer_steps: int = 1,
+    elapsed_sec: float = 1.0,
+    cur_tick: int = 2,
+    signal_updates: int = 3,
+) -> dict:
+    import torch
+
+    state = {
+        "gradscaler_state": {"scale": 65536.0},
+        "cur_nimg": cur_nimg,
+        "cur_tick": cur_tick,
+        "attempted_iteration": attempted_iteration,
+        "successful_optimizer_steps": successful_optimizer_steps,
+        "elapsed_sec": elapsed_sec,
+        "loss_fn_state": {
+            "schedule_name": schedule,
+            "stage": 0,
+            "ratio": 0.5,
+            "schedule": {},
+        },
+    }
+    if schedule == "adaptive_v1":
+        state["loss_fn_state"]["schedule"] = {
+            "loss_ema": 0.8,
+            "loss_reference": 1.0,
+            "signal_updates": signal_updates,
+        }
+    torch.save(state, run_dir / "training-state-latest.pt")
+    return state
+
+
+def write_adaptive_activation_run(
+    run_dir: Path,
+    *,
+    data_path: Path,
+    transfer_path: Path,
+    final_signal_updates: int = 8,
+    first_nonzero_correction_iteration: int | None = 12,
+    final_adaptive_active: bool = True,
+) -> None:
+    """Write a 32-iteration activation fixture with controller-state timing."""
+    write_minimal_run(
+        run_dir,
+        schedule="adaptive_v1",
+        mode="activation",
+        duration=0.004,
+        data_path=data_path,
+        transfer_path=transfer_path,
+        include_telemetry=True,
+    )
+    summary_path = run_dir / "train_summary.csv"
+    with summary_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames
+
+    rows = []
+    for iteration in range(1, 33):
+        signal_updates = min(iteration // 4, final_signal_updates)
+        correction_active = (
+            first_nonzero_correction_iteration is not None
+            and iteration >= first_nonzero_correction_iteration
+            and (iteration < 32 or final_adaptive_active)
+        )
+        adaptive_active = signal_updates >= 3 and (iteration < 32 or final_adaptive_active)
+        rows.append(
+            {
+                "attempted_iteration": iteration,
+                "successful_optimizer_steps": iteration,
+                "processed_nimg": iteration * 128,
+                "processed_kimg": f"{iteration * 0.128:.6f}",
+                "loss": "1.25",
+                "grad_scale": "65536",
+                "step_skipped": "0",
+                "schedule": "adaptive_v1",
+                "stage": "0",
+                "next_loop_cur_tick": "1" if iteration < 32 else "2",
+                "elapsed_sec": f"{iteration / 10:.1f}",
+                "peak_vram_gb": "1.5",
+                "loss_ema": "0.8" if signal_updates else "",
+                "loss_reference": "1.0" if signal_updates else "",
+                "correction": "0.02" if correction_active else "0",
+                "signal_updates": str(signal_updates),
+                "adaptive_active": str(int(adaptive_active)),
+                "r_over_t_mean": "0.75",
+                "gap_mean": "0.25",
+            }
+        )
+    with summary_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 class RunnerInfraTests(unittest.TestCase):
@@ -387,6 +508,419 @@ class CollectorInfraTests(unittest.TestCase):
         write_dummy_asset(data, b"dataset")
         write_dummy_asset(transfer, b"transfer")
         return data, transfer
+
+    def _run_collector(
+        self,
+        run_dir: Path,
+        outdir: Path,
+        data: Path,
+        transfer: Path,
+        *,
+        schedule: str,
+        mode: str = "stability",
+        load_training_state: bool = False,
+    ) -> subprocess.CompletedProcess:
+        command = [
+            sys.executable,
+            str(COLLECTOR),
+            "--run-dir", str(run_dir),
+            "--outdir", str(outdir),
+            "--data", str(data),
+            "--transfer", str(transfer),
+            "--mode", mode,
+            "--schedule", schedule,
+            "--allow-dirty",
+            "--skip-snapshot-load",
+        ]
+        if not load_training_state:
+            command.append("--skip-training-state-load")
+        return subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_adaptive_telemetry_is_validated_and_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLLECTOR),
+                    "--run-dir", str(run_dir),
+                    "--outdir", str(outdir),
+                    "--data", str(data),
+                    "--transfer", str(transfer),
+                    "--mode", "stability",
+                    "--schedule", "adaptive_v1",
+                    "--allow-dirty",
+                    "--skip-snapshot-load",
+                    "--skip-training-state-load",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            with (outdir / "train_summary.csv").open(newline="", encoding="utf-8") as handle:
+                packaged = next(csv.DictReader(handle))
+            self.assertEqual(packaged["signal_updates"], "3")
+            self.assertEqual(packaged["adaptive_active"], "1")
+            self.assertEqual(packaged["r_over_t_mean"], "0.75")
+            self.assertEqual(packaged["next_loop_cur_tick"], "2")
+            metadata = json.loads((outdir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertTrue(metadata["schedule_telemetry_available"])
+            self.assertEqual(metadata["final_signal_updates"], 3)
+            self.assertEqual(metadata["first_nonzero_correction_iteration"], 1)
+
+    def test_training_state_must_match_final_csv_and_adaptive_telemetry(self):
+        cases = [
+            (
+                "cur_nimg",
+                lambda state: state.update(cur_nimg=15_872),
+                "training-state cur_nimg mismatch",
+            ),
+            (
+                "attempted_iteration",
+                lambda state: state.update(attempted_iteration=2),
+                "training-state attempted_iteration mismatch",
+            ),
+            (
+                "successful_optimizer_steps",
+                lambda state: state.update(successful_optimizer_steps=0),
+                "training-state successful_optimizer_steps mismatch",
+            ),
+            (
+                "elapsed_sec",
+                lambda state: state.update(elapsed_sec=2.0),
+                "training-state elapsed_sec mismatch",
+            ),
+            (
+                "cur_tick",
+                lambda state: state.update(cur_tick=3),
+                "training-state cur_tick mismatch",
+            ),
+            (
+                "signal_updates",
+                lambda state: state["loss_fn_state"]["schedule"].update(signal_updates=2),
+                "training-state signal_updates mismatch",
+            ),
+            (
+                "loss_ema",
+                lambda state: state["loss_fn_state"]["schedule"].update(loss_ema=0.7),
+                "training-state loss_ema mismatch",
+            ),
+            (
+                "loss_reference",
+                lambda state: state["loss_fn_state"]["schedule"].update(loss_reference=1.1),
+                "training-state loss_reference mismatch",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            data, transfer = self._assets(tmp_path)
+            for name, mutate, error in cases:
+                with self.subTest(name=name):
+                    run_dir = tmp_path / f"run-{name}"
+                    outdir = tmp_path / f"out-{name}"
+                    write_minimal_run(
+                        run_dir,
+                        schedule="adaptive_v1",
+                        data_path=data,
+                        transfer_path=transfer,
+                        include_telemetry=True,
+                    )
+                    state = write_collector_training_state(run_dir, schedule="adaptive_v1")
+                    mutate(state)
+                    import torch
+
+                    torch.save(state, run_dir / "training-state-latest.pt")
+                    completed = self._run_collector(
+                        run_dir,
+                        outdir,
+                        data,
+                        transfer,
+                        schedule="adaptive_v1",
+                        load_training_state=True,
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn(error, completed.stderr)
+
+    def test_matching_training_state_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            write_collector_training_state(run_dir, schedule="adaptive_v1")
+            completed = self._run_collector(
+                run_dir,
+                outdir,
+                data,
+                transfer,
+                schedule="adaptive_v1",
+                load_training_state=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_baseline_training_state_uses_recorded_tick_not_tick_formula(self):
+        # With batch=128 and default --tick=50 kimg, real maintenance runs at
+        # 0.128, 50.176, 100.224, and 128 kimg. The final checkpoint therefore
+        # persists cur_tick=4, whereas the removed ceil-based formula gives 3.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                mode="baseline",
+                duration=0.128,
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+                next_loop_cur_tick=4,
+            )
+            write_collector_training_state(
+                run_dir,
+                schedule="adaptive_v1",
+                cur_nimg=128_000,
+                cur_tick=4,
+            )
+            completed = self._run_collector(
+                run_dir,
+                outdir,
+                data,
+                transfer,
+                schedule="adaptive_v1",
+                mode="baseline",
+                load_training_state=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            with (outdir / "train_summary.csv").open(newline="", encoding="utf-8") as handle:
+                self.assertEqual(next(csv.DictReader(handle))["next_loop_cur_tick"], "4")
+
+    def test_adaptive_activation_gate_records_controller_and_pair_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_adaptive_activation_run(
+                run_dir,
+                data_path=data,
+                transfer_path=transfer,
+            )
+            write_collector_training_state(
+                run_dir,
+                schedule="adaptive_v1",
+                cur_nimg=4_096,
+                attempted_iteration=32,
+                successful_optimizer_steps=32,
+                elapsed_sec=3.2,
+                cur_tick=2,
+                signal_updates=8,
+            )
+            completed = self._run_collector(
+                run_dir, outdir, data, transfer,
+                schedule="adaptive_v1", mode="activation",
+                load_training_state=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            with (run_dir / "train_summary.csv").open(newline="", encoding="utf-8") as handle:
+                self.assertEqual(list(csv.DictReader(handle))[-1]["next_loop_cur_tick"], "2")
+            metadata = json.loads((outdir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["final_signal_updates"], 8)
+            self.assertTrue(metadata["final_adaptive_active"])
+            self.assertEqual(metadata["first_nonzero_correction_iteration"], 12)
+            self.assertEqual(metadata["first_adapted_pair_iteration"], 13)
+            self.assertTrue(metadata["activation_gate_applied"])
+            self.assertTrue(metadata["activation_gate_passed"])
+
+    def test_adaptive_activation_gate_rejects_nonactivated_or_late_controller(self):
+        cases = [
+            (
+                dict(final_signal_updates=2, first_nonzero_correction_iteration=None),
+                "final_signal_updates must be >= 3",
+            ),
+            (
+                dict(first_nonzero_correction_iteration=None),
+                "first_nonzero_correction_iteration is required",
+            ),
+            (
+                dict(final_adaptive_active=False),
+                "final adaptive_active must be true",
+            ),
+            (
+                dict(first_nonzero_correction_iteration=31),
+                "first_adapted_pair_iteration must be before final_iteration",
+            ),
+            (
+                dict(first_nonzero_correction_iteration=29),
+                "at least 4 attempted iterations",
+            ),
+        ]
+        for fixture_kwargs, expected_error in cases:
+            with self.subTest(fixture_kwargs=fixture_kwargs), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                run_dir = tmp_path / "run"
+                outdir = tmp_path / "out"
+                data, transfer = self._assets(tmp_path)
+                write_adaptive_activation_run(
+                    run_dir,
+                    data_path=data,
+                    transfer_path=transfer,
+                    **fixture_kwargs,
+                )
+                completed = self._run_collector(
+                    run_dir, outdir, data, transfer,
+                    schedule="adaptive_v1", mode="activation",
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(expected_error, completed.stderr)
+
+    def test_adaptive_telemetry_rejects_invalid_types_and_ranges(self):
+        cases = [
+            ({"signal_updates": "3.5"}, "non-negative integer"),
+            ({"adaptive_active": "maybe"}, "must be one of"),
+            ({"correction": "nan"}, "must be finite"),
+            ({"r_over_t_mean": "1.1", "gap_mean": "-0.1"}, "must be in [0, 1]"),
+        ]
+        for changes, expected_error in cases:
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                run_dir = tmp_path / "run"
+                outdir = tmp_path / "out"
+                data, transfer = self._assets(tmp_path)
+                write_minimal_run(
+                    run_dir,
+                    schedule="adaptive_v1",
+                    data_path=data,
+                    transfer_path=transfer,
+                    include_telemetry=True,
+                )
+                summary_path = run_dir / "train_summary.csv"
+                with summary_path.open(newline="", encoding="utf-8") as handle:
+                    reader = csv.DictReader(handle)
+                    fieldnames = reader.fieldnames
+                    row = next(reader)
+                row.update(changes)
+                with summary_path.open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerow(row)
+
+                completed = self._run_collector(
+                    run_dir, outdir, data, transfer, schedule="adaptive_v1"
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(expected_error, completed.stderr)
+
+    def test_adaptive_warmup_telemetry_allows_missing_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            summary_path = run_dir / "train_summary.csv"
+            with summary_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = reader.fieldnames
+                row = next(reader)
+            row.update(
+                loss_reference="",
+                correction="0",
+                signal_updates="1",
+                adaptive_active="0",
+            )
+            with summary_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerow(row)
+
+            completed = self._run_collector(
+                run_dir, outdir, data, transfer, schedule="adaptive_v1"
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_migrated_telemetry_prefix_is_auditable_not_fabricated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="adaptive_v1",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            summary_path = run_dir / "train_summary.csv"
+            with summary_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = reader.fieldnames
+                final_row = next(reader)
+            historical_row = dict(final_row)
+            historical_row.update(
+                attempted_iteration="1",
+                successful_optimizer_steps="1",
+                processed_nimg="128",
+                processed_kimg="0.128",
+                elapsed_sec="0.1",
+            )
+            for field in (
+                "loss_ema", "loss_reference", "correction", "signal_updates",
+                "adaptive_active", "r_over_t_mean", "gap_mean",
+            ):
+                historical_row[field] = ""
+            final_row.update(attempted_iteration="2", successful_optimizer_steps="2")
+            with summary_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows([historical_row, final_row])
+
+            completed = self._run_collector(
+                run_dir, outdir, data, transfer, schedule="adaptive_v1"
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            metadata = json.loads((outdir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertTrue(metadata["schedule_telemetry_columns_available"])
+            self.assertFalse(metadata["schedule_telemetry_available"])
+            self.assertEqual(metadata["schedule_telemetry_rows"], 1)
+            self.assertEqual(metadata["schedule_telemetry_total_rows"], 2)
+            self.assertEqual(metadata["schedule_telemetry_coverage"], 0.5)
+            self.assertEqual(metadata["first_schedule_telemetry_iteration"], 2)
+            with (outdir / "train_summary.csv").open(newline="", encoding="utf-8") as handle:
+                packaged = list(csv.DictReader(handle))
+            self.assertEqual(packaged[0]["signal_updates"], "")
+            self.assertEqual(packaged[1]["signal_updates"], "3")
 
     def test_missing_csv_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

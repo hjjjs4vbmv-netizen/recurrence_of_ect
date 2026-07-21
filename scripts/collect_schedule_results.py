@@ -22,6 +22,16 @@ import sys
 from pathlib import Path
 
 
+TELEMETRY_FIELDS = (
+    "loss_ema",
+    "loss_reference",
+    "correction",
+    "signal_updates",
+    "adaptive_active",
+    "r_over_t_mean",
+    "gap_mean",
+)
+
 OUTPUT_FIELDS = (
     "attempted_iteration",
     "successful_optimizer_steps",
@@ -31,6 +41,8 @@ OUTPUT_FIELDS = (
     "step_skipped",
     "schedule",
     "stage",
+    "next_loop_cur_tick",
+    *TELEMETRY_FIELDS,
     "seconds",
     "peak_vram_mib",
 )
@@ -40,6 +52,9 @@ MODE_DURATION_MIMG = {
     "stability": 0.016,
     "baseline": 0.128,
 }
+
+ACTIVATION_MIN_SIGNAL_UPDATES = 3
+ACTIVATION_MIN_FOLLOWING_ITERATIONS = 4
 
 
 def expected_final_nimg(duration_mimg: float, global_batch: int) -> int:
@@ -53,6 +68,66 @@ def expected_final_nimg(duration_mimg: float, global_batch: int) -> int:
     target_kimg = max(int(duration_mimg * 1000), 1)
     target_nimg = target_kimg * 1000
     return math.ceil(target_nimg / global_batch) * global_batch
+
+
+def adaptive_runtime_summary(packaged: list[dict]) -> dict:
+    """Derive auditable controller/pair activation boundaries from CSV rows.
+
+    Telemetry is sampled at the end of an attempted iteration. Therefore, a
+    correction first observed in iteration N can first affect the pair drawn
+    for iteration N + 1, never the pair metrics recorded on iteration N.
+    """
+    final_iteration = packaged[-1]["attempted_iteration"]
+    final_signal_updates = packaged[-1]["signal_updates"]
+    final_adaptive_active = packaged[-1]["adaptive_active"]
+    first_nonzero_correction_iteration = next(
+        (
+            row["attempted_iteration"] for row in packaged
+            if row["correction"] is not None and row["correction"] != 0
+        ),
+        None,
+    )
+    first_adapted_pair_iteration = None
+    if first_nonzero_correction_iteration is not None:
+        candidate = first_nonzero_correction_iteration + 1
+        if candidate <= final_iteration:
+            first_adapted_pair_iteration = candidate
+    return {
+        "final_signal_updates": final_signal_updates,
+        "final_adaptive_active": final_adaptive_active,
+        "first_nonzero_correction_iteration": first_nonzero_correction_iteration,
+        "first_adapted_pair_iteration": first_adapted_pair_iteration,
+    }
+
+
+def enforce_adaptive_activation_gate(runtime_summary: dict, final_iteration: int) -> None:
+    """Require an activation run to exercise correction during training."""
+    signal_updates = runtime_summary["final_signal_updates"]
+    if signal_updates is None or signal_updates < ACTIVATION_MIN_SIGNAL_UPDATES:
+        fail(
+            "activation gate: final_signal_updates must be "
+            f">= {ACTIVATION_MIN_SIGNAL_UPDATES}, got {signal_updates}"
+        )
+    if runtime_summary["first_nonzero_correction_iteration"] is None:
+        fail("activation gate: first_nonzero_correction_iteration is required")
+    if runtime_summary["final_adaptive_active"] is not True:
+        fail("activation gate: final adaptive_active must be true")
+
+    first_correction = runtime_summary["first_nonzero_correction_iteration"]
+    first_adapted_pair = runtime_summary["first_adapted_pair_iteration"]
+    if first_adapted_pair is None or first_adapted_pair >= final_iteration:
+        fail(
+            "activation gate: first_adapted_pair_iteration must be before "
+            f"final_iteration (correction={first_correction}, "
+            f"adapted_pair={first_adapted_pair}, final={final_iteration})"
+        )
+    following_iterations = final_iteration - first_correction
+    if following_iterations < ACTIVATION_MIN_FOLLOWING_ITERATIONS:
+        fail(
+            "activation gate: nonzero correction must be followed by at least "
+            f"{ACTIVATION_MIN_FOLLOWING_ITERATIONS} attempted iterations "
+            f"(correction={first_correction}, final={final_iteration})"
+        )
 
 
 def fail(message: str) -> None:
@@ -134,6 +209,40 @@ def sha256_file(path: Path | None) -> str | None:
 
 def parse_boolish(value: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def parse_strict_bool(value: str | None, field: str) -> bool:
+    text = "" if value is None else str(value).strip().lower()
+    if text in {"1", "true"}:
+        return True
+    if text in {"0", "false"}:
+        return False
+    fail(f"{field} must be one of 0/1/false/true, got {value!r}")
+
+
+def parse_finite_float(value: str | None, field: str) -> float:
+    text = "" if value is None else str(value).strip()
+    if text == "":
+        fail(f"{field} must not be empty")
+    try:
+        number = float(text)
+    except ValueError:
+        fail(f"{field} must be numeric, got {value!r}")
+    if not math.isfinite(number):
+        fail(f"{field} must be finite, got {value!r}")
+    return number
+
+
+def parse_optional_float(value: str | None, field: str) -> float | None:
+    text = "" if value is None else str(value).strip()
+    return None if text == "" else parse_finite_float(text, field)
+
+
+def parse_nonnegative_integer(value: str | None, field: str) -> int:
+    number = parse_finite_float(value, field)
+    if not number.is_integer() or number < 0:
+        fail(f"{field} must be a non-negative integer, got {value!r}")
+    return int(number)
 
 
 def load_rows(path: Path) -> list[dict]:
@@ -255,6 +364,111 @@ def extract_duration_from_command(exact_command: str) -> float | None:
         if token.startswith("--duration="):
             return float(token.split("=", 1)[1])
     return None
+
+
+def _state_integer(state: dict, key: str, training_state: Path) -> int:
+    try:
+        value = int(state[key])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        fail(f"training-state {key} must be an integer: {training_state}")
+    return value
+
+
+def _state_optional_float(value, field: str, training_state: Path) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        fail(f"training-state {field} must be numeric: {training_state}")
+    if not math.isfinite(number):
+        fail(f"training-state {field} must be finite: {training_state}")
+    return number
+
+
+def validate_training_state_against_csv(
+    state: dict,
+    *,
+    training_state: Path,
+    last_csv_row: dict,
+    last_packaged_row: dict,
+    schedule: str,
+) -> None:
+    """Fail closed when the checkpoint does not describe the final CSV row."""
+    csv_nimg = int(float(last_csv_row["processed_nimg"]))
+    csv_attempted = int(float(last_csv_row["attempted_iteration"]))
+    csv_successful = int(float(last_csv_row["successful_optimizer_steps"]))
+    csv_elapsed = float(last_csv_row["elapsed_sec"])
+    expected_progress = {
+        "cur_nimg": csv_nimg,
+        "attempted_iteration": csv_attempted,
+        "successful_optimizer_steps": csv_successful,
+    }
+    for key, expected in expected_progress.items():
+        actual = _state_integer(state, key, training_state)
+        if actual != expected:
+            fail(
+                f"training-state {key} mismatch: state={actual} csv_last={expected} "
+                f"({training_state})"
+            )
+
+    state_elapsed = _state_optional_float(state["elapsed_sec"], "elapsed_sec", training_state)
+    if state_elapsed is None or not math.isclose(state_elapsed, csv_elapsed, rel_tol=0.0, abs_tol=1e-6):
+        fail(
+            f"training-state elapsed_sec mismatch: state={state_elapsed} csv_last={csv_elapsed} "
+            f"({training_state})"
+        )
+
+    # The training state persists the next-loop tick. The training loop records
+    # that authoritative value in the CSV instead of asking the collector to
+    # recreate maintenance timing from --tick and image count.
+    expected_cur_tick = parse_nonnegative_integer(
+        last_csv_row.get("next_loop_cur_tick"), "next_loop_cur_tick"
+    )
+    actual_cur_tick = _state_integer(state, "cur_tick", training_state)
+    if actual_cur_tick != expected_cur_tick:
+        fail(
+            f"training-state cur_tick mismatch: state={actual_cur_tick} "
+            f"csv_last_next_loop={expected_cur_tick} ({training_state})"
+        )
+
+    if schedule != "adaptive_v1":
+        return
+    loss_fn_state = state.get("loss_fn_state")
+    if not isinstance(loss_fn_state, dict):
+        fail(f"adaptive training-state missing loss_fn_state: {training_state}")
+    if loss_fn_state.get("schedule_name") != schedule:
+        fail(
+            f"training-state schedule mismatch: state={loss_fn_state.get('schedule_name')!r} "
+            f"expected={schedule!r} ({training_state})"
+        )
+    controller_state = loss_fn_state.get("schedule")
+    if not isinstance(controller_state, dict):
+        fail(f"adaptive training-state missing loss_fn_state.schedule: {training_state}")
+
+    state_updates = _state_integer(controller_state, "signal_updates", training_state)
+    csv_updates = last_packaged_row["signal_updates"]
+    if state_updates != csv_updates:
+        fail(
+            f"training-state signal_updates mismatch: state={state_updates} "
+            f"csv_last={csv_updates} ({training_state})"
+        )
+    for field in ("loss_ema", "loss_reference"):
+        state_value = _state_optional_float(controller_state.get(field), field, training_state)
+        csv_value = last_packaged_row[field]
+        if (state_value is None) != (csv_value is None):
+            fail(
+                f"training-state {field} mismatch: state={state_value} "
+                f"csv_last={csv_value} ({training_state})"
+            )
+        if state_value is not None and not math.isclose(
+            # train_summary.csv writes controller floats with .12g precision.
+            state_value, csv_value, rel_tol=1e-11, abs_tol=1e-12
+        ):
+            fail(
+                f"training-state {field} mismatch: state={state_value} "
+                f"csv_last={csv_value} ({training_state})"
+            )
 
 
 def collect_runtime_metadata(run_meta: dict[str, str]) -> dict:
@@ -394,6 +608,12 @@ def main(argv: list[str] | None = None) -> None:
     csv_schedule = next(iter(schedules))
     if csv_schedule != args.schedule:
         fail(f"CSV schedule={csv_schedule!r} != --schedule={args.schedule!r}")
+    telemetry_columns = [field in rows[0] for field in TELEMETRY_FIELDS]
+    if any(telemetry_columns) and not all(telemetry_columns):
+        fail("train_summary.csv has a partial schedule telemetry schema")
+    telemetry_columns_available = all(telemetry_columns)
+    if args.schedule == "adaptive_v1" and not telemetry_columns_available:
+        fail("adaptive_v1 train_summary.csv missing stable schedule telemetry columns")
 
     exact_command = extract_exact_command(command_meta, args.log, args.exact_command_file)
     cmd_schedule = extract_mapping_from_command(exact_command)
@@ -413,6 +633,10 @@ def main(argv: list[str] | None = None) -> None:
     packaged: list[dict] = []
     nan_count = 0
     inf_count = 0
+    previous_signal_updates = 0
+    telemetry_started = False
+    telemetry_rows = 0
+    first_telemetry_iteration = None
 
     for row in rows:
         loss = float(row["loss"])
@@ -428,6 +652,75 @@ def main(argv: list[str] | None = None) -> None:
         grad_scale = float(row["grad_scale"])
         losses.append(loss)
         grad_scales.append(grad_scale)
+        telemetry = {
+            "loss_ema": None,
+            "loss_reference": None,
+            "correction": None,
+            "signal_updates": None,
+            "adaptive_active": None,
+            "r_over_t_mean": None,
+            "gap_mean": None,
+        }
+        row_has_telemetry = telemetry_columns_available and any(
+            str(row.get(field, "")).strip() for field in TELEMETRY_FIELDS
+        )
+        if telemetry_columns_available and not row_has_telemetry:
+            if telemetry_started:
+                fail(f"schedule telemetry gap at attempted_iteration={row['attempted_iteration']}")
+        elif row_has_telemetry:
+            telemetry_started = True
+            telemetry_rows += 1
+            if first_telemetry_iteration is None:
+                first_telemetry_iteration = int(float(row["attempted_iteration"]))
+            telemetry.update(
+                loss_ema=parse_optional_float(row["loss_ema"], "loss_ema"),
+                loss_reference=parse_optional_float(row["loss_reference"], "loss_reference"),
+                correction=parse_finite_float(row["correction"], "correction"),
+                signal_updates=parse_nonnegative_integer(row["signal_updates"], "signal_updates"),
+                adaptive_active=parse_strict_bool(row["adaptive_active"], "adaptive_active"),
+                r_over_t_mean=parse_finite_float(row["r_over_t_mean"], "r_over_t_mean"),
+                gap_mean=parse_finite_float(row["gap_mean"], "gap_mean"),
+            )
+            if telemetry["signal_updates"] < previous_signal_updates:
+                fail("schedule signal_updates is not monotonic")
+            previous_signal_updates = telemetry["signal_updates"]
+            if not 0 <= telemetry["r_over_t_mean"] <= 1:
+                fail(f"r_over_t_mean must be in [0, 1], got {telemetry['r_over_t_mean']}")
+            if not 0 <= telemetry["gap_mean"] <= 1:
+                fail(f"gap_mean must be in [0, 1], got {telemetry['gap_mean']}")
+            if not math.isclose(
+                telemetry["r_over_t_mean"] + telemetry["gap_mean"],
+                1.0,
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            ):
+                fail(f"r_over_t_mean + gap_mean != 1 at attempted_iteration={row['attempted_iteration']}")
+            if telemetry["loss_reference"] is not None and telemetry["loss_ema"] is None:
+                fail("loss_reference requires loss_ema")
+            if telemetry["loss_ema"] is not None and telemetry["loss_ema"] <= 0:
+                fail(f"loss_ema must be > 0, got {telemetry['loss_ema']}")
+            if telemetry["loss_reference"] is not None and telemetry["loss_reference"] <= 0:
+                fail(f"loss_reference must be > 0, got {telemetry['loss_reference']}")
+            if telemetry["signal_updates"] == 0 and (
+                telemetry["loss_ema"] is not None or telemetry["loss_reference"] is not None
+            ):
+                fail("signal_updates=0 requires empty loss_ema/loss_reference")
+            if telemetry["signal_updates"] > 0 and telemetry["loss_ema"] is None:
+                fail("positive signal_updates requires loss_ema")
+            if not telemetry["adaptive_active"] and telemetry["correction"] != 0:
+                fail("nonzero correction requires adaptive_active=true")
+            if telemetry["adaptive_active"] and (
+                telemetry["signal_updates"] == 0 or telemetry["loss_reference"] is None
+            ):
+                fail("adaptive_active=true requires positive signal_updates and loss_reference")
+            if args.schedule != "adaptive_v1" and (
+                telemetry["signal_updates"] != 0
+                or telemetry["adaptive_active"]
+                or telemetry["correction"] != 0
+                or telemetry["loss_ema"] is not None
+            ):
+                fail(f"fixed schedule {args.schedule!r} contains adaptive controller telemetry")
+
         packaged.append(
             {
                 "attempted_iteration": int(float(row["attempted_iteration"])),
@@ -438,13 +731,24 @@ def main(argv: list[str] | None = None) -> None:
                 "step_skipped": "true" if step_skipped else "false",
                 "schedule": row.get("schedule", args.schedule),
                 "stage": row.get("stage", ""),
+                "next_loop_cur_tick": row.get("next_loop_cur_tick", ""),
+                **telemetry,
                 "seconds": float(row["elapsed_sec"]),
                 "peak_vram_mib": peak_gb * 1024.0,
             }
         )
 
+    if args.schedule == "adaptive_v1" and telemetry_rows == 0:
+        fail("adaptive_v1 train_summary.csv contains no populated schedule telemetry rows")
+
     attempted = len(packaged)
     successful = attempted - skipped
+    for expected_iteration, row in enumerate(packaged, start=1):
+        if row["attempted_iteration"] != expected_iteration:
+            fail(
+                "attempted_iteration sequence mismatch: "
+                f"csv={row['attempted_iteration']} expected={expected_iteration}"
+            )
     last_attempted = packaged[-1]["attempted_iteration"]
     last_successful = packaged[-1]["successful_optimizer_steps"]
     if last_attempted != attempted:
@@ -471,6 +775,11 @@ def main(argv: list[str] | None = None) -> None:
             f"(duration_mimg={args.duration_mimg}, batch={args.global_batch}, "
             f"expected_nimg={expected_nimg}) for mode={args.mode}"
         )
+
+    adaptive_runtime = adaptive_runtime_summary(packaged)
+    activation_gate_applied = args.mode == "activation" and args.schedule == "adaptive_v1"
+    if activation_gate_applied:
+        enforce_adaptive_activation_gate(adaptive_runtime, final_iteration=attempted)
 
     if args.log is not None and args.log.is_file():
         hits = [
@@ -500,6 +809,13 @@ def main(argv: list[str] | None = None) -> None:
         for key in ("cur_nimg", "cur_tick", "attempted_iteration", "successful_optimizer_steps", "elapsed_sec"):
             if key not in state:
                 fail(f"{key} missing in {training_state}")
+        validate_training_state_against_csv(
+            state,
+            training_state=training_state,
+            last_csv_row=rows[-1],
+            last_packaged_row=packaged[-1],
+            schedule=args.schedule,
+        )
         print(f"[collect_schedule_results] loaded training-state: {training_state}")
 
     wall_time = None
@@ -570,6 +886,15 @@ def main(argv: list[str] | None = None) -> None:
         "metrics_enabled": False,
         "mode": args.mode,
         "schedule": args.schedule,
+        "schedule_telemetry_columns_available": telemetry_columns_available,
+        "schedule_telemetry_available": telemetry_rows == len(packaged),
+        "schedule_telemetry_rows": telemetry_rows,
+        "schedule_telemetry_total_rows": len(packaged),
+        "schedule_telemetry_coverage": telemetry_rows / len(packaged),
+        "first_schedule_telemetry_iteration": first_telemetry_iteration,
+        **adaptive_runtime,
+        "activation_gate_applied": activation_gate_applied,
+        "activation_gate_passed": True if activation_gate_applied else None,
         "duration_mimg": args.duration_mimg,
         "evidence_class": evidence_class,
         **runtime,
@@ -594,6 +919,14 @@ def main(argv: list[str] | None = None) -> None:
                     "step_skipped": row["step_skipped"],
                     "schedule": row["schedule"],
                     "stage": row["stage"],
+                    "next_loop_cur_tick": row["next_loop_cur_tick"],
+                    "loss_ema": "" if row["loss_ema"] is None else f"{row['loss_ema']:.12g}",
+                    "loss_reference": "" if row["loss_reference"] is None else f"{row['loss_reference']:.12g}",
+                    "correction": "" if row["correction"] is None else f"{row['correction']:.12g}",
+                    "signal_updates": "" if row["signal_updates"] is None else row["signal_updates"],
+                    "adaptive_active": "" if row["adaptive_active"] is None else int(row["adaptive_active"]),
+                    "r_over_t_mean": "" if row["r_over_t_mean"] is None else f"{row['r_over_t_mean']:.12g}",
+                    "gap_mean": "" if row["gap_mean"] is None else f"{row['gap_mean']:.12g}",
                     "seconds": f"{row['seconds']:.6f}",
                     "peak_vram_mib": f"{row['peak_vram_mib']:.6f}",
                 }
