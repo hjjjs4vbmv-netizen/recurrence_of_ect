@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "evaluation_type": "anonymous_paired_visual_preference",
+  "result_status": "supplementary_evidence",
+  "training_budget_kimg": 64,
+  "training_seed_count": 3,
+  "training_seeds_anonymized": true,
+  "nfe_modes": [
+    1,
+    2
+  ],
+  "mid_t_by_mode": {
+    "NFE=1": [],
+    "NFE=2": [
+      0.821
+    ]
+  },
+  "pairs_per_training_seed_and_nfe": 4,
+  "pair_count": 24,
+  "evaluation_seed": 20260722,
+  "tile_indices": [
+    0,
+    85,
+    170,
+    255
+  ],
+  "assignment_seed": 2026072201,
+  "order_seed": 2026072202,
+  "allowed_choices": [
+    "A",
+    "B",
+    "TIE"
+  ],
+  "image_resolution_per_candidate": [
+    32,
+    32
+  ],
+  "display_scaling": "nearest-neighbor 8x",
+  "method_identity_in_public_package": false
+}
