@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "training_budget_kimg": 16,
+  "all_six_runs_complete": true,
+  "all_losses_finite": true,
+  "summary_by_schedule": {
+    "sigmoid": {
+      "complete_16k_runs": 3,
+      "finite_loss_runs": 3,
+      "total_skipped_steps": 27,
+      "mean_skipped_steps": 9,
+      "mean_peak_vram_mib": 5915.697493333333,
+      "mean_wall_time_seconds": 103.75779266666667
+    },
+    "adaptive_v1": {
+      "complete_16k_runs": 3,
+      "finite_loss_runs": 3,
+      "total_skipped_steps": 27,
+      "mean_skipped_steps": 9,
+      "mean_peak_vram_mib": 5915.697493333333,
+      "mean_wall_time_seconds": 103.05505833333333,
+      "controller_activated_runs": 3
+    }
+  }
+}

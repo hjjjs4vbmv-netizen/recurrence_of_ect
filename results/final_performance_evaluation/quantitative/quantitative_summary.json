@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "evaluation_label": "5k-sample proxy evaluation; not a standard FID-50k benchmark",
+  "primary_metric": "kid5k_full",
+  "auxiliary_metric": "fid5k_full",
+  "delta_definition": "adaptive_v1 - sigmoid; negative favors adaptive_v1",
+  "training_seeds": [
+    0,
+    1,
+    2
+  ],
+  "nfe": {
+    "1": {
+      "mid_t": []
+    },
+    "2": {
+      "mid_t": [
+        0.821
+      ]
+    }
+  },
+  "summary_by_nfe": {
+    "1": {
+      "kid5k_full": {
+        "paired_deltas_adaptive_minus_fixed": [
+          0.0036890506744384766,
+          -0.031680911779403687,
+          0.006771981716156006
+        ],
+        "mean_delta": -0.007073293129603068,
+        "sample_sd_delta": 0.021366499190613977,
+        "adaptive_fixed_tie_seed_counts": [
+          1,
+          2,
+          0
+        ]
+      },
+      "fid5k_full": {
+        "paired_deltas_adaptive_minus_fixed": [
+          1.1131345254364078,
+          -20.868254966799554,
+          2.8006206987770383
+        ],
+        "mean_delta": -5.6514999141953695,
+        "sample_sd_delta": 13.205079634160493,
+        "adaptive_fixed_tie_seed_counts": [
+          1,
+          2,
+          0
+        ]
+      }
+    },
+    "2": {
+      "kid5k_full": {
+        "paired_deltas_adaptive_minus_fixed": [
+          0.0014698803424835205,
+          -0.0008755028247833252,
+          0.0017031431198120117
+        ],
+        "mean_delta": 0.000765840212504069,
+        "sample_sd_delta": 0.00142622161859951,
+        "adaptive_fixed_tie_seed_counts": [
+          1,
+          2,
+          0
+        ]
+      },
+      "fid5k_full": {
+        "paired_deltas_adaptive_minus_fixed": [
+          1.239992483991017,
+          -2.099222798939195,
+          1.0206722829707928
+        ],
+        "mean_delta": 0.053813989340871636,
+        "sample_sd_delta": 1.8678064397601257,
+        "adaptive_fixed_tie_seed_counts": [
+          1,
+          2,
+          0
+        ]
+      }
+    }
+  }
+}
