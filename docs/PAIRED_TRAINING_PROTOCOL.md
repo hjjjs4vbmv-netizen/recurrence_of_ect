@@ -33,7 +33,7 @@ Except for `--schedule` / `--mapping`, both arms use:
 | q / k / b / c | 256 / 8 / 1 / 0 |
 | double | 10000 |
 | ema_beta | 0.9993 |
-| seed | 0 |
+| seed | Explicit per run; 0, 1, or 2 for the final paired matrix |
 | Precision | FP16 + GradScaler |
 | Metrics | none |
 
@@ -51,14 +51,19 @@ Except for `--schedule` / `--mapping`, both arms use:
 ```bash
 bash scripts/run_schedule_experiment.sh \
   --mode stability \
-  --schedule sigmoid
+  --schedule sigmoid \
+  --seed 1
 
 bash scripts/run_schedule_experiment.sh \
   --mode stability \
-  --schedule adaptive_v1
+  --schedule adaptive_v1 \
+  --seed 1
 ```
 
-Except for `--schedule` (and Role C adaptive-internal knobs once on `main`), every other frozen knob is identical.
+Within each paired training seed, except for `--schedule` (and Role C
+adaptive-internal knobs once on `main`), every other frozen knob is identical.
+The runner accepts only seeds 0, 1, and 2 for this final matrix; its default
+remains seed 0 for compatibility with the archived run.
 
 Default unique outdirs:
 
@@ -128,6 +133,7 @@ python scripts/collect_schedule_results.py \
   --outdir results/fixed_baseline_v1 \
   --mode stability \
   --schedule sigmoid \
+  --seed 1 \
   --data "$ECT_DATA_PATH" \
   --transfer "$ECT_TRANSFER_PATH"
 ```

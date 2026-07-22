@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "training_code_anchor": "5344a5c97ab461b640ad5c5413cbf57eec527c2a",
+  "cells": [
+    {
+      "method": "adaptive_v1",
+      "training_seed": 0,
+      "budget_kimg": 16,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T063437Z-seed0/network-snapshot-kimg0016.pkl",
+      "checkpoint_sha256": "7d162808dc98deec28d269693cba4242b97e52d8431017fe9e45a54a8c3d151a",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed0_5344a5c9"
+    },
+    {
+      "method": "adaptive_v1",
+      "training_seed": 0,
+      "budget_kimg": 32,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T063437Z-seed0/network-snapshot-kimg0032.pkl",
+      "checkpoint_sha256": "a9f6c06d22e1e6409680efd31d43fe90714fec4a7b211ea4bd718a6cae810d9c",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed0_5344a5c9"
+    },
+    {
+      "method": "adaptive_v1",
+      "training_seed": 0,
+      "budget_kimg": 64,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T063437Z-seed0/network-snapshot-kimg0064.pkl",
+      "checkpoint_sha256": "dc5fdcac27f49e845eae1d28571cd0c3be6756aa6aee785e3189c1c27f527aa3",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed0_5344a5c9"
+    },
+    {
+      "method": "adaptive_v1",
+      "training_seed": 1,
+      "budget_kimg": 16,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/network-snapshot-kimg0016.pkl",
+      "checkpoint_sha256": "b7bc291a80298121c091945519d79f1f8c79deb318b4790e2d7371a1510b7a13",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed1_5344a5c9"
+    },
+    {
+      "method": "adaptive_v1",
+      "training_seed": 1,
+      "budget_kimg": 32,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/network-snapshot-kimg0032.pkl",
+      "checkpoint_sha256": "610f353f4afeebee9e4ab12ee1fa170365d0bb42d138aa0a06c0c087bc4e577e",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed1_5344a5c9"
+    },
+    {
+      "method": "adaptive_v1",
+      "training_seed": 1,
+      "budget_kimg": 64,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/network-snapshot-kimg0064.pkl",
+      "checkpoint_sha256": "c1eaef2c89c1365aa5c3e5b65c8522152468bf213923004c299ac6a058fddbdf",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed1_5344a5c9"
+    },
+    {
+      "method": "adaptive_v1",
+      "training_seed": 2,
+      "budget_kimg": 16,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0016.pkl",
+      "checkpoint_sha256": "b04098a8d53449b3d2666f87b8d63e6f16ba11d6c2a5069c1d81d33d995f1d43",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed2_5344a5c9"
+    },
+    {
+      "method": "adaptive_v1",
+      "training_seed": 2,
+      "budget_kimg": 32,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0032.pkl",
+      "checkpoint_sha256": "1c2e266d2e9c02459f10fbbe53c1497e8df8c656d54ea53b6c7ab69c9b3c8060",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed2_5344a5c9"
+    },
+    {
+      "method": "adaptive_v1",
+      "training_seed": 2,
+      "budget_kimg": 64,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0064.pkl",
+      "checkpoint_sha256": "3f3b4a69dec396d4af1010c6c26323d442e64b60fd3c7b354c4820c60aae1157",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/adaptive_v1_traj64_seed2_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 0,
+      "budget_kimg": 16,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/network-snapshot-kimg0016.pkl",
+      "checkpoint_sha256": "32aa4661584663c40bc05a3b5c5bef3bd4e8b60e289023d491fbe46fac5478ed",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed0_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 0,
+      "budget_kimg": 32,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/network-snapshot-kimg0032.pkl",
+      "checkpoint_sha256": "cb196bf9d6ba0fdd20858cc64c59a138c625c7584a5a445a37f9bdf9380e8c71",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed0_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 0,
+      "budget_kimg": 64,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/network-snapshot-kimg0064.pkl",
+      "checkpoint_sha256": "514b67696ca911ccdd9e16c5cce93d91e2c2c77433a82a2c2b8c0ae0b410dc9f",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed0_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 1,
+      "budget_kimg": 16,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T063952Z-seed1/network-snapshot-kimg0016.pkl",
+      "checkpoint_sha256": "3ffd271c99a3d09bc63c749f5b69f76af37bbbec54678e88885eb3341750e7ec",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed1_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 1,
+      "budget_kimg": 32,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T063952Z-seed1/network-snapshot-kimg0032.pkl",
+      "checkpoint_sha256": "e5cc717d278bcd9d5ab7930486c22ce1a81e915a502deb31e6265a3e4e126b90",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed1_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 1,
+      "budget_kimg": 64,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T063952Z-seed1/network-snapshot-kimg0064.pkl",
+      "checkpoint_sha256": "bb98925649c0267064210a069887ae9b5dd3eff26727651318818ac2d46c09f9",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed1_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 2,
+      "budget_kimg": 16,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T065023Z-seed2/network-snapshot-kimg0016.pkl",
+      "checkpoint_sha256": "3fed09e540f8419db32bac9c1fdfe93033aaad225198ecc2bbce4eccf26b5865",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed2_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 2,
+      "budget_kimg": 32,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T065023Z-seed2/network-snapshot-kimg0032.pkl",
+      "checkpoint_sha256": "3f1bf37bf6512751ab55bc89ad1971c98679c79d5b5979d20b4730d62c64e420",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed2_5344a5c9"
+    },
+    {
+      "method": "sigmoid",
+      "training_seed": 2,
+      "budget_kimg": 64,
+      "checkpoint": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T065023Z-seed2/network-snapshot-kimg0064.pkl",
+      "checkpoint_sha256": "73c5b0c7b3e5130a76f80d26cb30e6969d049d941ac0e6568ee16f7c1d5bc925",
+      "training_result_dir": "/mnt/ect_project/runs/packaged-traj64/sigmoid_traj64_seed2_5344a5c9"
+    }
+  ]
+}

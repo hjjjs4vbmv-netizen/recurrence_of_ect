@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "training_budget_kimg": 16,
+  "cells": [
+    {"schedule": "sigmoid", "training_seed": 0, "checkpoint": "/path/to/sigmoid_seed0_16k.pkl", "checkpoint_sha256": "32aa4661584663c40bc05a3b5c5bef3bd4e8b60e289023d491fbe46fac5478ed", "training_result_dir": "/path/to/sigmoid_seed0_packaged_result"},
+    {"schedule": "adaptive_v1", "training_seed": 0, "checkpoint": "/path/to/adaptive_v1_seed0_16k.pkl", "checkpoint_sha256": "7d162808dc98deec28d269693cba4242b97e52d8431017fe9e45a54a8c3d151a", "training_result_dir": "/path/to/adaptive_v1_seed0_packaged_result"},
+    {"schedule": "sigmoid", "training_seed": 1, "checkpoint": "/path/to/sigmoid_seed1_16k.pkl", "training_result_dir": "/path/to/sigmoid_seed1_packaged_result"},
+    {"schedule": "adaptive_v1", "training_seed": 1, "checkpoint": "/path/to/adaptive_v1_seed1_16k.pkl", "training_result_dir": "/path/to/adaptive_v1_seed1_packaged_result"},
+    {"schedule": "sigmoid", "training_seed": 2, "checkpoint": "/path/to/sigmoid_seed2_16k.pkl", "training_result_dir": "/path/to/sigmoid_seed2_packaged_result"},
+    {"schedule": "adaptive_v1", "training_seed": 2, "checkpoint": "/path/to/adaptive_v1_seed2_16k.pkl", "training_result_dir": "/path/to/adaptive_v1_seed2_packaged_result"}
+  ]
+}

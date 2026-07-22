@@ -1,0 +1,7 @@
+method,training_seed,processed_kimg,attempted_iterations,successful_optimizer_steps,amp_skipped_steps,nan_count,inf_count,trailing25_loss_mean,trailing25_loss_std,rt_gap_always_legal,adaptive_correction_activated,correction_saturated_steps,correction_sign_changes,checkpoint_64_sha256
+sigmoid,0,64.0,500,491,9,0,0,18.1286909236,1.1366661949055983,True,False,,,514b67696ca911ccdd9e16c5cce93d91e2c2c77433a82a2c2b8c0ae0b410dc9f
+sigmoid,1,64.0,500,490,10,0,0,16.5431518652,0.8780730995890309,True,False,,,bb98925649c0267064210a069887ae9b5dd3eff26727651318818ac2d46c09f9
+sigmoid,2,64.0,500,490,10,0,0,19.3483638004,0.8957528825276382,True,False,,,73c5b0c7b3e5130a76f80d26cb30e6969d049d941ac0e6568ee16f7c1d5bc925
+adaptive_v1,0,64.0,500,491,9,0,0,17.7538050128,1.1076821247791304,True,True,0,0,dc5fdcac27f49e845eae1d28571cd0c3be6756aa6aee785e3189c1c27f527aa3
+adaptive_v1,1,64.0,500,491,9,0,0,16.4695864772,0.9582064148191193,True,True,0,2,c1eaef2c89c1365aa5c3e5b65c8522152468bf213923004c299ac6a058fddbdf
+adaptive_v1,2,64.0,500,491,9,0,0,18.4528682712,0.8518902144018617,True,True,0,0,3f3b4a69dec396d4af1010c6c26323d442e64b60fd3c7b354c4820c60aae1157

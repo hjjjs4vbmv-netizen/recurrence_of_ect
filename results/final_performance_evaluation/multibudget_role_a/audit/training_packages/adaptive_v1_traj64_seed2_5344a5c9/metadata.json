@@ -1,0 +1,78 @@
+{
+  "acceptance": {
+    "adaptive_correction_activated": true,
+    "amp_skipped_steps": 9,
+    "attempted_iterations": 500,
+    "checkpoints": {
+      "16": {
+        "kimg": 16,
+        "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0016.pkl",
+        "network_snapshot_sha256": "b04098a8d53449b3d2666f87b8d63e6f16ba11d6c2a5069c1d81d33d995f1d43",
+        "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/training-state-kimg0016.pt",
+        "training_state_sha256": "a236bc36883d579eb96bfeed8af631700a4494cf22ed54c95a2d25266eb6ede0"
+      },
+      "32": {
+        "kimg": 32,
+        "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0032.pkl",
+        "network_snapshot_sha256": "1c2e266d2e9c02459f10fbbe53c1497e8df8c656d54ea53b6c7ab69c9b3c8060",
+        "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/training-state-kimg0032.pt",
+        "training_state_sha256": "7b0f7573b89e90a2dcc42ffe92d6d934de126b8271eb86bcab5530fa46095e5f"
+      },
+      "64": {
+        "kimg": 64,
+        "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0064.pkl",
+        "network_snapshot_sha256": "3f3b4a69dec396d4af1010c6c26323d442e64b60fd3c7b354c4820c60aae1157",
+        "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/training-state-kimg0064.pt",
+        "training_state_sha256": "5c0db34f005db341d87b6c1f60330919ee7d24cf657c17d7dab179ee7442b832"
+      }
+    },
+    "expected_attempted_at_64": 500,
+    "final_adaptive_active": true,
+    "final_correction": -0.00683546046077,
+    "final_signal_updates": 128,
+    "inf_count": 0,
+    "nan_count": 0,
+    "processed_kimg": 64.0,
+    "reached_64_kimg": true,
+    "rt_gap_always_legal": true,
+    "successful_optimizer_steps": 491,
+    "trailing25_mean": 18.4528682712,
+    "trailing25_std": 0.8518902144018617
+  },
+  "checkpoints": {
+    "16": {
+      "kimg": 16,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0016.pkl",
+      "network_snapshot_sha256": "b04098a8d53449b3d2666f87b8d63e6f16ba11d6c2a5069c1d81d33d995f1d43",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/training-state-kimg0016.pt",
+      "training_state_sha256": "a236bc36883d579eb96bfeed8af631700a4494cf22ed54c95a2d25266eb6ede0"
+    },
+    "32": {
+      "kimg": 32,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0032.pkl",
+      "network_snapshot_sha256": "1c2e266d2e9c02459f10fbbe53c1497e8df8c656d54ea53b6c7ab69c9b3c8060",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/training-state-kimg0032.pt",
+      "training_state_sha256": "7b0f7573b89e90a2dcc42ffe92d6d934de126b8271eb86bcab5530fa46095e5f"
+    },
+    "64": {
+      "kimg": 64,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/network-snapshot-kimg0064.pkl",
+      "network_snapshot_sha256": "3f3b4a69dec396d4af1010c6c26323d442e64b60fd3c7b354c4820c60aae1157",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/training-state-kimg0064.pt",
+      "training_state_sha256": "5c0db34f005db341d87b6c1f60330919ee7d24cf657c17d7dab179ee7442b832"
+    }
+  },
+  "entry": "ct_train.py",
+  "exact_commands": {
+    "stage16_source": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-stability-5344a5c9-20260722T020346Z-seed2",
+    "stage32": "python /tmp/ect-train-5344a5c/ct_train.py --data=/mnt/ect_project/datasets/cifar10-32x32.zip --outdir=/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2 --nosubdir --cond=False --arch=ddpmpp --precond=ect --batch=128 --batch-gpu=16 --optim=RAdam --lr=0.0001 --dropout=0.2 --augment=0 --mapping=adaptive_v1 -q 256 -k 8 -b 1 -c 0 --double=10000 --ema_beta=0.9993 --seed=2 --fp16=True --enable_amp=True --metrics=none --duration=0.032 --resume=/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/training-state-latest.pt",
+    "stage64": "python /tmp/ect-train-5344a5c/ct_train.py --data=/mnt/ect_project/datasets/cifar10-32x32.zip --outdir=/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2 --nosubdir --cond=False --arch=ddpmpp --precond=ect --batch=128 --batch-gpu=16 --optim=RAdam --lr=0.0001 --dropout=0.2 --augment=0 --mapping=adaptive_v1 -q 256 -k 8 -b 1 -c 0 --double=10000 --ema_beta=0.9993 --seed=2 --fp16=True --enable_amp=True --metrics=none --duration=0.064 --resume=/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2/training-state-latest.pt"
+  },
+  "hard_fail": [],
+  "mode": "continuous_traj64_resume_chain",
+  "package_ok": true,
+  "run_dir": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T065540Z-seed2",
+  "schedule": "adaptive_v1",
+  "training_code_anchor": "5344a5c97ab461b640ad5c5413cbf57eec527c2a",
+  "training_seed": 2
+}

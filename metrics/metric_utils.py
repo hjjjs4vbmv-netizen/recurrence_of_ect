@@ -19,7 +19,11 @@ import dnnlib
 #----------------------------------------------------------------------------
 
 class MetricOptions:
-    def __init__(self, generator_fn=None, G=None, G_kwargs={}, dataset_kwargs={}, num_gpus=1, rank=0, device=None, progress=None, cache=True):
+    def __init__(
+        self, generator_fn=None, G=None, G_kwargs={}, dataset_kwargs={},
+        num_gpus=1, rank=0, device=None, progress=None, cache=True,
+        sample_seeds=None, metric_seed=None,
+    ):
         assert 0 <= rank < num_gpus
 
         self.generator_fn   = generator_fn
@@ -31,6 +35,8 @@ class MetricOptions:
         self.device         = device if device is not None else torch.device('cuda', rank)
         self.progress       = progress.sub() if progress is not None and rank == 0 else ProgressMonitor()
         self.cache          = cache
+        self.sample_seeds   = None if sample_seeds is None else list(sample_seeds)
+        self.metric_seed    = metric_seed
 
 #----------------------------------------------------------------------------
 
@@ -231,6 +237,16 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 
 #----------------------------------------------------------------------------
 
+def make_seeded_latents(sample_seeds, shape):
+    """Create one CPU float64 latent per explicit per-sample seed."""
+    latents = []
+    for seed in sample_seeds:
+        generator = torch.Generator(device='cpu').manual_seed(int(seed))
+        latents.append(torch.randn(shape, generator=generator, dtype=torch.float64))
+    return torch.stack(latents)
+
+#----------------------------------------------------------------------------
+
 def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1, batch_size=128, batch_gen=128, jit=False, **stats_kwargs):
     if batch_gen is None:
         batch_gen = min(batch_size, 4)
@@ -243,8 +259,11 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs)
 
     # Image generation func.
-    def run_generator(z, c):
-        img = generator_fn(G, z, c, **opts.G_kwargs)
+    def run_generator(z, c, sample_seeds=None):
+        kwargs = dict(opts.G_kwargs)
+        if sample_seeds is not None:
+            kwargs['sample_seeds'] = sample_seeds
+        img = generator_fn(G, z, c, **kwargs)
         img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         return img
 
@@ -258,17 +277,43 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     # Initialize.
     stats = FeatureStats(**stats_kwargs)
     assert stats.max_items is not None
+    if opts.sample_seeds is not None:
+        if opts.num_gpus != 1:
+            raise ValueError('explicit sample_seeds currently require num_gpus=1')
+        if len(opts.sample_seeds) != stats.max_items:
+            raise ValueError(
+                f'explicit sample_seeds has {len(opts.sample_seeds)} entries, '
+                f'but this metric requires {stats.max_items} generated samples'
+            )
     progress = opts.progress.sub(tag='generator features', num_items=stats.max_items, rel_lo=rel_lo, rel_hi=rel_hi)
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
 
     # Main loop.
+    seed_offset = 0
     while not stats.is_full():
         images = []
         for _i in range(batch_size // batch_gen):
-            z = torch.randn([batch_gen, G.img_channels, G.img_resolution, G.img_resolution], device=opts.device) 
-            c = [dataset.get_label(np.random.randint(len(dataset))) for _i in range(batch_gen)]
+            current_batch = min(batch_gen, stats.max_items - stats.num_items - len(images) * batch_gen)
+            if current_batch <= 0:
+                break
+            batch_sample_seeds = None
+            if opts.sample_seeds is None:
+                z = torch.randn(
+                    [current_batch, G.img_channels, G.img_resolution, G.img_resolution],
+                    device=opts.device,
+                )
+                label_indices = [np.random.randint(len(dataset)) for _i in range(current_batch)]
+            else:
+                batch_sample_seeds = opts.sample_seeds[seed_offset:seed_offset + current_batch]
+                z = make_seeded_latents(
+                    batch_sample_seeds,
+                    [G.img_channels, G.img_resolution, G.img_resolution],
+                ).to(opts.device)
+                label_indices = [int(seed) % len(dataset) for seed in batch_sample_seeds]
+                seed_offset += current_batch
+            c = [dataset.get_label(index) for index in label_indices]
             c = torch.from_numpy(np.stack(c)).pin_memory().to(opts.device)
-            images.append(run_generator(z, c))
+            images.append(run_generator(z, c, sample_seeds=batch_sample_seeds))
         images = torch.cat(images)
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])

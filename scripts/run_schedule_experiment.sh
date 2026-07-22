@@ -22,6 +22,7 @@ MODE=""
 SCHEDULE=""
 RESUME=""
 OUTDIR_OVERRIDE=""
+SEED="0"
 
 usage() {
     cat <<'EOF'
@@ -29,6 +30,7 @@ Usage:
   bash scripts/run_schedule_experiment.sh \
     --schedule {sigmoid|adaptive_v1} \
     --mode {dry-run|activation|stability|baseline} \
+    [--seed {0|1|2}] \
     [--outdir DIR] \
     [--resume PATH_TO_training-state.pt]
 
@@ -170,6 +172,10 @@ while [[ $# -gt 0 ]]; do
             RESUME="${2:-}"
             shift 2
             ;;
+        --seed)
+            SEED="${2:-}"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -209,6 +215,14 @@ case "$MODE" in
         ;;
 esac
 
+case "$SEED" in
+    0|1|2) ;;
+    *)
+        echo "Usage: $0 --seed {0|1|2}" >&2
+        exit 2
+        ;;
+esac
+
 # Frozen paired knobs — identical for sigmoid and adaptive_v1.
 DATA="${ECT_DATA_PATH:-/mnt/ect_project/datasets/cifar10-32x32.zip}"
 TRANSFER="${ECT_TRANSFER_PATH:-/mnt/ect_project/pretrained/edm-cifar10-32x32-uncond-vp.pkl}"
@@ -229,7 +243,6 @@ B=1
 C=0
 DOUBLE=10000
 EMA_BETA=0.9993
-SEED=0
 FP16=True
 ENABLE_AMP=True
 METRICS=none
@@ -255,7 +268,11 @@ resolve_outdir() {
         return
     fi
     # Unique per (schedule, mode, commit, time): never mixes sigmoid with adaptive_v1.
-    OUTDIR="${RUNS_ROOT}/${SCHEDULE_SLUG}-${MODE}-${GIT_SHA_SHORT}-${RUN_STAMP}"
+    SEED_SLUG=""
+    if [[ "${SEED}" != "0" ]]; then
+        SEED_SLUG="-seed${SEED}"
+    fi
+    OUTDIR="${RUNS_ROOT}/${SCHEDULE_SLUG}-${MODE}${SEED_SLUG}-${GIT_SHA_SHORT}-${RUN_STAMP}"
 }
 
 build_cmd() {

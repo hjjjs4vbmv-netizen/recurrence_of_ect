@@ -1,0 +1,40 @@
+{
+  "adaptive_correction_activated": false,
+  "amp_skipped_steps": 9,
+  "attempted_iterations": 500,
+  "checkpoints": {
+    "16": {
+      "kimg": 16,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/network-snapshot-kimg0016.pkl",
+      "network_snapshot_sha256": "32aa4661584663c40bc05a3b5c5bef3bd4e8b60e289023d491fbe46fac5478ed",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/training-state-kimg0016.pt",
+      "training_state_sha256": "0dccc15dfe5bbe49466ee18109147f1500db31f8036e120d55c70482b1e7b8f8"
+    },
+    "32": {
+      "kimg": 32,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/network-snapshot-kimg0032.pkl",
+      "network_snapshot_sha256": "cb196bf9d6ba0fdd20858cc64c59a138c625c7584a5a445a37f9bdf9380e8c71",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/training-state-kimg0032.pt",
+      "training_state_sha256": "a96f5605afaf2ec538461e1e78c65ff3aa5e511511ae06c6cec666f5180b3f02"
+    },
+    "64": {
+      "kimg": 64,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/network-snapshot-kimg0064.pkl",
+      "network_snapshot_sha256": "514b67696ca911ccdd9e16c5cce93d91e2c2c77433a82a2c2b8c0ae0b410dc9f",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/training-state-kimg0064.pt",
+      "training_state_sha256": "01bc5ffe5fc95790c80b8c2bf3ff8744d7217b536aacf693f48b9173094ad664"
+    }
+  },
+  "expected_attempted_at_64": 500,
+  "final_adaptive_active": false,
+  "final_correction": 0.0,
+  "final_signal_updates": 0,
+  "inf_count": 0,
+  "nan_count": 0,
+  "processed_kimg": 64.0,
+  "reached_64_kimg": true,
+  "rt_gap_always_legal": true,
+  "successful_optimizer_steps": 491,
+  "trailing25_mean": 18.1286909236,
+  "trailing25_std": 1.1366661949055983
+}

@@ -1,0 +1,1 @@
+{"results": {"fid5k_full": 429.7458044055775}, "metric": "fid5k_full", "total_time": 22.540801525115967, "total_time_str": "23s", "num_gpus": 1, "snapshot_pkl": "../../../../../../../ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T063437Z-seed0/network-snapshot-kimg0064.pkl", "timestamp": 1784708460.9944263}

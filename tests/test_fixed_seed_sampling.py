@@ -19,6 +19,7 @@ from scripts.sample_fixed_seeds import (
     sha256_file,
     write_manifest,
 )
+from metrics.metric_utils import make_seeded_latents
 
 
 class DummyNet(torch.nn.Module):
@@ -63,6 +64,31 @@ class FixedSeedSamplingTest(unittest.TestCase):
         torch.testing.assert_close(one_step_latent, two_step_latent, rtol=0, atol=0)
         torch.testing.assert_close(two_step_latent, repeated_latent, rtol=0, atol=0)
         torch.testing.assert_close(first_noise[0], repeated_noise[0], rtol=0, atol=0)
+
+    def test_metric_latents_match_fixed_seed_sampler(self):
+        shape = (3, 32, 32)
+        expected, _ = seeded_inputs([3, 7, 11], shape, 0)
+        actual = make_seeded_latents([3, 7, 11], shape)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    def test_generator_sample_seeds_match_explicit_step_noise(self):
+        shape = (3, 32, 32)
+        seeds = [3, 7]
+        latents, step_noises = seeded_inputs(seeds, shape, 1)
+        generator_fn = __import__("ct_eval").generator_fn
+        explicit = generator_fn(
+            self.net,
+            latents,
+            mid_t=[0.821],
+            step_noises=step_noises,
+        )
+        generated = generator_fn(
+            self.net,
+            latents,
+            mid_t=[0.821],
+            sample_seeds=seeds,
+        )
+        torch.testing.assert_close(generated, explicit, rtol=0, atol=0)
 
     def test_work_groups_are_pixel_identical_for_nfe1_and_nfe2(self):
         for nfe in [1, 2]:

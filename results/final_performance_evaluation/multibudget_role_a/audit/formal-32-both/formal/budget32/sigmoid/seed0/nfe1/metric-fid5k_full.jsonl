@@ -1,0 +1,1 @@
+{"results": {"fid5k_full": 435.11671879076783}, "metric": "fid5k_full", "total_time": 22.58716607093811, "total_time_str": "23s", "num_gpus": 1, "snapshot_pkl": "../../../../../../../ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T062924Z-seed0/network-snapshot-kimg0032.pkl", "timestamp": 1784709414.4876547}

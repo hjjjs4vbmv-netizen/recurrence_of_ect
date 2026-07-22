@@ -161,6 +161,8 @@ cython_debug/
 
 
 # Project-related
+.DS_Store
+/paired_16k_5344a5c_canonical/
 datasets/
 runs/
 checkpoints/

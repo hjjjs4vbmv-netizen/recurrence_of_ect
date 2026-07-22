@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "cells": [
+    {"method": "sigmoid", "training_seed": 0, "budget_kimg": 64, "checkpoint": "/path/to/sigmoid_seed0_64k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 0, "budget_kimg": 64, "checkpoint": "/path/to/adaptive_v1_seed0_64k.pkl"},
+    {"method": "sigmoid", "training_seed": 1, "budget_kimg": 64, "checkpoint": "/path/to/sigmoid_seed1_64k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 1, "budget_kimg": 64, "checkpoint": "/path/to/adaptive_v1_seed1_64k.pkl"},
+    {"method": "sigmoid", "training_seed": 2, "budget_kimg": 64, "checkpoint": "/path/to/sigmoid_seed2_64k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 2, "budget_kimg": 64, "checkpoint": "/path/to/adaptive_v1_seed2_64k.pkl"},
+    {"method": "sigmoid", "training_seed": 0, "budget_kimg": 32, "checkpoint": "/path/to/sigmoid_seed0_32k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 0, "budget_kimg": 32, "checkpoint": "/path/to/adaptive_v1_seed0_32k.pkl"},
+    {"method": "sigmoid", "training_seed": 1, "budget_kimg": 32, "checkpoint": "/path/to/sigmoid_seed1_32k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 1, "budget_kimg": 32, "checkpoint": "/path/to/adaptive_v1_seed1_32k.pkl"},
+    {"method": "sigmoid", "training_seed": 2, "budget_kimg": 32, "checkpoint": "/path/to/sigmoid_seed2_32k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 2, "budget_kimg": 32, "checkpoint": "/path/to/adaptive_v1_seed2_32k.pkl"},
+    {"method": "sigmoid", "training_seed": 0, "budget_kimg": 16, "checkpoint": "/path/to/sigmoid_seed0_16k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 0, "budget_kimg": 16, "checkpoint": "/path/to/adaptive_v1_seed0_16k.pkl"},
+    {"method": "sigmoid", "training_seed": 1, "budget_kimg": 16, "checkpoint": "/path/to/sigmoid_seed1_16k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 1, "budget_kimg": 16, "checkpoint": "/path/to/adaptive_v1_seed1_16k.pkl"},
+    {"method": "sigmoid", "training_seed": 2, "budget_kimg": 16, "checkpoint": "/path/to/sigmoid_seed2_16k.pkl"},
+    {"method": "adaptive_v1", "training_seed": 2, "budget_kimg": 16, "checkpoint": "/path/to/adaptive_v1_seed2_16k.pkl"}
+  ]
+}
