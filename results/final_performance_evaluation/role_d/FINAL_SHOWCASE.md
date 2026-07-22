@@ -48,7 +48,8 @@ aggregation. No human preference result is claimed. The visual grids are
 descriptive and use a fixed layout without selecting only favorable
 Adaptive v1 examples.
 
-## Final conclusion
+## Authoritative final conclusion
 
-The frozen scientific conclusion is provided in `FINAL_CONCLUSION.md`.
-Role D preserves that conclusion and does not alter its decision criteria.
+The single authoritative scientific conclusion is maintained at
+`results/role_c_final/FINAL_CONCLUSION.md`. Role D links to that record and
+does not duplicate or modify its decision criteria.
