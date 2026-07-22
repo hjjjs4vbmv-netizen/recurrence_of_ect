@@ -160,6 +160,34 @@ class RoleCAnalyzerTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("Current verdict: INCOMPLETE", (output / "FINAL_CONCLUSION.md").read_text(encoding="utf-8"))
 
+    def test_missing_sampling_provenance_is_not_misreported_as_missing_metric_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metrics, records = self.write_complete_fixture(root)
+            with metrics.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            for row in rows:
+                row["sampling_seed"] = ""
+                row["num_generated"] = ""
+            with metrics.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
+            output = root / "missing_provenance"
+            completed = subprocess.run(
+                [sys.executable, str(ANALYZER), "--metrics", str(metrics), "--training-records", str(records), "--outdir", str(output)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            conclusion = (output / "FINAL_CONCLUSION.md").read_text(encoding="utf-8")
+            self.assertIn("Current verdict: INCOMPLETE", conclusion)
+            self.assertIn("evaluation provenance is incomplete", conclusion)
+            self.assertIn("Metric coverage is complete", conclusion)
+            self.assertNotIn("matrix is not yet available", conclusion)
+
     def test_rejects_metric_that_exists_for_only_one_arm_of_a_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

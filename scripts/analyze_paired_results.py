@@ -878,11 +878,28 @@ def expected_quality_settings() -> set[tuple[float, int]]:
     return {(budget, nfe) for budget in EXPECTED_BUDGETS for nfe in EXPECTED_NFES}
 
 
-def select_primary_metric(aggregate: list[dict[str, Any]], expected_seeds: Iterable[int]) -> str | None:
+def primary_metric_availability(aggregate: list[dict[str, Any]], expected_seeds: Iterable[int]) -> tuple[str | None, str]:
+    """Return the usable metric and why no final-quality verdict is possible.
+
+    Complete paired values and complete evaluation provenance are distinct
+    requirements.  A CSV imported from a legacy Role-A report can have all
+    36 numerical values while omitting sampling_seed/num_generated; calling
+    that a missing metric matrix would hide the actual data-freeze issue.
+    """
     expected = expected_quality_settings()
     expected_count = len(set(expected_seeds))
+    complete_but_unverified = False
     for metric in METRICS:  # KID is deliberately first: it is the frozen primary metric.
-        available = {
+        covered = {
+            (float(row["budget_kimg"]), int(row["nfe"]))
+            for row in aggregate
+            if (
+                row["metric"] == metric
+                and row["paired_seed_count"] == expected_count
+                and row["coverage_complete"]
+            )
+        }
+        verified = {
             (float(row["budget_kimg"]), int(row["nfe"]))
             for row in aggregate
             if (
@@ -892,9 +909,13 @@ def select_primary_metric(aggregate: list[dict[str, Any]], expected_seeds: Itera
                 and row["paired_sampling_settings_verified"]
             )
         }
-        if available == expected:
-            return metric
-    return None
+        if verified == expected:
+            return metric, "COMPLETE"
+        if covered == expected:
+            complete_but_unverified = True
+    if complete_but_unverified:
+        return None, "SAMPLING_PROVENANCE_INCOMPLETE"
+    return None, "METRIC_COVERAGE_INCOMPLETE"
 
 
 def training_stability_status(
@@ -943,15 +964,23 @@ def training_stability_status(
 def conclusion_from_aggregate(
     aggregate: list[dict[str, Any]], per_seed: list[dict[str, Any]], expected_seeds: Iterable[int], skip_rate_tolerance: float
 ) -> dict[str, Any]:
-    primary = select_primary_metric(aggregate, expected_seeds)
+    primary, quality_availability = primary_metric_availability(aggregate, expected_seeds)
     stability, stability_findings = training_stability_status(per_seed, expected_seeds, skip_rate_tolerance)
     if primary is None:
+        if quality_availability == "SAMPLING_PROVENANCE_INCOMPLETE":
+            reason = (
+                "The complete paired KID/FID matrix is available, but its evaluation provenance is incomplete: "
+                "each fixed/adaptive pair must record the same nonempty sampling_seed and num_generated=5000."
+            )
+        else:
+            reason = "The complete 3-seed × 16/32/64 kimg × NFE=1/2 paired matrix is not yet available for one common metric."
         return {
             "label": "INCOMPLETE",
             "primary_metric": None,
+            "quality_availability": quality_availability,
             "stability": stability,
             "stability_findings": stability_findings,
-            "reason": "The complete 3-seed × 16/32/64 kimg × NFE=1/2 paired matrix is not yet available for one common metric.",
+            "reason": reason,
             "setting_signals": [],
         }
     expected_count = len(set(expected_seeds))
@@ -999,6 +1028,7 @@ def conclusion_from_aggregate(
     return {
         "label": label,
         "primary_metric": primary,
+        "quality_availability": quality_availability,
         "stability": stability,
         "stability_findings": stability_findings,
         "reason": reason,
@@ -1025,10 +1055,16 @@ def write_conclusion(
     lines = ["# Fixed sigmoid vs Adaptive v1 — Role C conclusion", "", f"## Current verdict: {conclusion['label']}", "", conclusion["reason"], ""]
     primary = conclusion["primary_metric"]
     if primary is None:
-        lines += [
-            "The report is deliberately provisional: it does not make a quality claim until one common metric covers every expected paired setting.",
-            "",
-        ]
+        if conclusion["quality_availability"] == "SAMPLING_PROVENANCE_INCOMPLETE":
+            lines += [
+                "The report is deliberately provisional: all numerical pairs are present, but it does not make a quality claim until every pair records matching sampling_seed values and num_generated=5000.",
+                "",
+            ]
+        else:
+            lines += [
+                "The report is deliberately provisional: it does not make a quality claim until one common metric covers every expected paired setting.",
+                "",
+            ]
     else:
         lines += [
             f"Primary metric: **{primary.replace('_', '-').upper()}** (lower is better). KID is preferred whenever its full frozen matrix is available; FID becomes the common fallback only when KID is incomplete.",
@@ -1085,7 +1121,10 @@ def write_conclusion(
             "",
         ]
     else:
-        lines += ["No common complete metric matrix is available yet.", ""]
+        if conclusion["quality_availability"] == "SAMPLING_PROVENANCE_INCOMPLETE":
+            lines += ["Metric coverage is complete, but sampling provenance is not verified for every setting.", ""]
+        else:
+            lines += ["No common complete metric matrix is available yet.", ""]
     lines += ["## Training and controller relationships", ""]
     if relationships:
         relationship_rows = []
