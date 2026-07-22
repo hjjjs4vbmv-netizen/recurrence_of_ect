@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "protocol_id": "final-performance-evaluation-v1-applied-to-1024k-seed0-scheme-b",
+  "evaluation_code_sha": "6fdcc54472b1cbc0b3e5d9c649df850b8969ead4",
+  "generated_seeds": "0-4999",
+  "sample_count": 5000,
+  "nfe": {
+    "1": {
+      "mid_t": []
+    },
+    "2": {
+      "mid_t": [
+        0.821
+      ]
+    }
+  },
+  "precision": "fp32",
+  "kid": {
+    "metric": "kid5k_full",
+    "primary": true,
+    "subset_count": 100,
+    "max_subset_size": 1000,
+    "protocol_rng_seed": 20260722,
+    "raw_unbiased": true
+  },
+  "fid": {
+    "metric": "fid5k_full",
+    "secondary": true,
+    "real_sample_count": 50000,
+    "generated_sample_count": 5000
+  },
+  "real_reference": {
+    "path": "/mnt/ect_project/datasets/cifar10-32x32.zip",
+    "sha256": "08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372",
+    "xflip": false
+  },
+  "feature_extractor": {
+    "url": "https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/inception-2015-12-05.pt",
+    "features": "raw_pre_softmax"
+  },
+  "batch_size": 128,
+  "generator_chunk_size": 128,
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "torch": "2.10.0+cu128",
+  "cuda": "12.8",
+  "proxy_limitation": "5k-sample proxy evaluation; not a standard FID-50k benchmark.",
+  "scope_note": "PR #19 metric and sampling implementation is applied unchanged to the supplied 1024 kimg seed0 Scheme-B pair."
+}

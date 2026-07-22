@@ -1,0 +1,5 @@
+arm,kind,path,bytes,sha256,seed,budget_kimg
+sigmoid,snapshot,/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/sigmoid-1024k-seed0/network-snapshot-000032.pkl,223163486,a54f3df776442c303f5b22a24541a5446e3ce62f05c71a7efe5d0e6747b04ceb,0,1024
+sigmoid,state,/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/sigmoid-1024k-seed0/training-state-000032.pt,669426643,5574e4bf0a2283389f2e460ce838f1a9633cff455676339de67ce724860e49e8,0,1024
+adaptive_v1,snapshot,/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/adaptive-b-1024k-seed0/network-snapshot-000032.pkl,223163642,7aa95fe6c44e0cc4b16eb030bc5bdf7869ee2d5a3176692530c251c172e0d908,0,1024
+adaptive_v1,state,/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/adaptive-b-1024k-seed0/training-state-000032.pt,669426963,289a3e7fe2a5d3e59986f6fd4f79161abb03392f692eab8ac2da0aa862371c48,0,1024

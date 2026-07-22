@@ -1,0 +1,1 @@
+{"results": {"kid5k_full": 0.0017406129179179288}, "metric": "kid5k_full", "total_time": 32.29677963256836, "total_time_str": "32s", "num_gpus": 1, "snapshot_pkl": "../../../../sigmoid-1024k-seed0/network-snapshot-000032.pkl", "timestamp": 1784731268.835185}

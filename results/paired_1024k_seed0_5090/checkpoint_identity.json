@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "training_commit": "4b80a4f78f954a93aa5d4a022b20efe661a7b184",
+  "seed": 0,
+  "budget_kimg": 1024,
+  "dataset_sha256": "08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372",
+  "transfer_sha256": "4d5dcc1f1d0d41c8934ad21626eeddbdc0460182becf9fc059a0631b1eedb4da",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5090"
+  },
+  "runtime": {
+    "python": "3.12.3",
+    "torch": "2.10.0+cu128",
+    "cuda": "12.8"
+  },
+  "frozen_options_equal_except_schedule": true,
+  "assets": [
+    {
+      "arm": "sigmoid",
+      "kind": "snapshot",
+      "path": "/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/sigmoid-1024k-seed0/network-snapshot-000032.pkl",
+      "bytes": 223163486,
+      "sha256": "a54f3df776442c303f5b22a24541a5446e3ce62f05c71a7efe5d0e6747b04ceb",
+      "seed": 0,
+      "budget_kimg": 1024
+    },
+    {
+      "arm": "sigmoid",
+      "kind": "state",
+      "path": "/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/sigmoid-1024k-seed0/training-state-000032.pt",
+      "bytes": 669426643,
+      "sha256": "5574e4bf0a2283389f2e460ce838f1a9633cff455676339de67ce724860e49e8",
+      "seed": 0,
+      "budget_kimg": 1024
+    },
+    {
+      "arm": "adaptive_v1",
+      "kind": "snapshot",
+      "path": "/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/adaptive-b-1024k-seed0/network-snapshot-000032.pkl",
+      "bytes": 223163642,
+      "sha256": "7aa95fe6c44e0cc4b16eb030bc5bdf7869ee2d5a3176692530c251c172e0d908",
+      "seed": 0,
+      "budget_kimg": 1024
+    },
+    {
+      "arm": "adaptive_v1",
+      "kind": "state",
+      "path": "/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/adaptive-b-1024k-seed0/training-state-000032.pt",
+      "bytes": 669426963,
+      "sha256": "289a3e7fe2a5d3e59986f6fd4f79161abb03392f692eab8ac2da0aa862371c48",
+      "seed": 0,
+      "budget_kimg": 1024
+    }
+  ],
+  "status": "PASS"
+}
