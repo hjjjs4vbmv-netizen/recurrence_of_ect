@@ -15,7 +15,7 @@ from . import metric_utils
 
 #----------------------------------------------------------------------------
 
-def compute_kid(opts, max_real, num_gen, num_subsets, max_subset_size):
+def compute_kid(opts, max_real, num_gen, num_subsets, max_subset_size, random_seed=None):
     # Direct TorchScript translation of http://download.tensorflow.org/models/image/imagenet/inception-2015-12-05.tgz
     detector_url = 'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/inception-2015-12-05.pt'
     detector_kwargs = dict(return_features=True) # Return raw features before the softmax layer.
@@ -33,10 +33,11 @@ def compute_kid(opts, max_real, num_gen, num_subsets, max_subset_size):
 
     n = real_features.shape[1]
     m = min(min(real_features.shape[0], gen_features.shape[0]), max_subset_size)
+    rng = np.random if random_seed is None else np.random.RandomState(random_seed)
     t = 0
     for _subset_idx in range(num_subsets):
-        x = gen_features[np.random.choice(gen_features.shape[0], m, replace=False)]
-        y = real_features[np.random.choice(real_features.shape[0], m, replace=False)]
+        x = gen_features[rng.choice(gen_features.shape[0], m, replace=False)]
+        y = real_features[rng.choice(real_features.shape[0], m, replace=False)]
         a = (x @ x.T / n + 1) ** 3 + (y @ y.T / n + 1) ** 3
         b = (x @ y.T / n + 1) ** 3
         t += (a.sum() - np.diag(a).sum()) / (m - 1) - b.sum() * 2 / m

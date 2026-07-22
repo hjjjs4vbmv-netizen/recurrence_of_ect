@@ -55,7 +55,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--data',          help='Path to the dataset', metavar='ZIP|DIR',                     type=str, required=True)
 @click.option('--cond',          help='Train class-conditional model', metavar='BOOL',              type=bool, default=False, show_default=True)
 @click.option('--arch',          help='Network architecture', metavar='ddpmpp|ncsnpp|adm',          type=click.Choice(['ddpmpp', 'ncsnpp', 'adm']), default='ddpmpp', show_default=True)
-@click.option('--precond',       help='Preconditioning & loss function', metavar='vp|ve|edm',       type=click.Choice(['vp', 've', 'edm', 'ct']), default='ct', show_default=True)
+@click.option('--precond',       help='Preconditioning & loss function', metavar='vp|ve|edm|ct',    type=click.Choice(['vp', 've', 'edm', 'ct']), default='ct', show_default=True)
 
 # Hyperparameters.
 @click.option('--cbase',         help='Channel multiplier  [default: varies]', metavar='INT',       type=int)
@@ -94,6 +94,8 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mid_t',         help='Sampler steps [default: 0.821]',                             multiple=True, default=[0.821])
 @click.option('--nfe',           help='Number of function evaluations',                            type=click.Choice(['1', '2']), default='2', show_default=True)
 @click.option('--metrics',       help='Comma-separated list or "none" [default: fid50k_full]',      type=CommaSeparatedList(), default='fid50k_full')
+@click.option('--metric-repeats', help='Number of times to repeat each metric',                     type=click.IntRange(min=1), default=3, show_default=True)
+@click.option('--sample-seeds',  help='Explicit per-sample seed list/range (single-GPU only)',       metavar='LIST', type=str)
 
 
 def main(**kwargs):
@@ -146,7 +148,20 @@ def main(**kwargs):
 
     # Trainig options.
     c.update(cudnn_benchmark=opts.bench)
-    c.update(mid_t=() if opts.nfe == '1' else opts.mid_t, metrics=opts.metrics)
+    sample_seeds = None if opts.sample_seeds is None else parse_int_list(opts.sample_seeds)
+    if sample_seeds is not None:
+        if len(sample_seeds) == 0:
+            raise click.ClickException('--sample-seeds must not be empty')
+        if len(set(sample_seeds)) != len(sample_seeds):
+            raise click.ClickException('--sample-seeds must not contain duplicates')
+        if dist.get_world_size() != 1:
+            raise click.ClickException('--sample-seeds currently requires exactly one GPU')
+    c.update(
+        mid_t=() if opts.nfe == '1' else opts.mid_t,
+        metrics=opts.metrics,
+        metric_repeats=opts.metric_repeats,
+        sample_seeds=sample_seeds,
+    )
 
     # Random seed.
     if opts.seed is not None:
@@ -275,7 +290,7 @@ def save_image_grid(img, fname, drange, grid_size):
 @torch.no_grad()
 def generator_fn(
     net, latents, class_labels=None, 
-    t_max=80, mid_t=None, step_noises=None
+    t_max=80, mid_t=None, step_noises=None, sample_seeds=None,
 ):
     # Time step discretization.
     mid_t = [] if mid_t is None else mid_t
@@ -284,8 +299,26 @@ def generator_fn(
     # t_0 = T, t_N = 0
     t_steps = torch.cat([net.round_sigma(t_steps), torch.zeros_like(t_steps[:1])])
 
-    if step_noises is not None and len(step_noises) != max(len(t_steps) - 2, 0):
+    intermediate_steps = max(len(t_steps) - 2, 0)
+    if step_noises is not None and len(step_noises) != intermediate_steps:
         raise ValueError('step_noises must contain one tensor per intermediate sampling step')
+    if sample_seeds is not None:
+        if step_noises is not None:
+            raise ValueError('sample_seeds and step_noises are mutually exclusive')
+        if len(sample_seeds) != latents.shape[0]:
+            raise ValueError('sample_seeds must contain one seed per latent')
+        seeded_noises = [[] for _ in range(intermediate_steps)]
+        shape = tuple(latents.shape[1:])
+        for seed in sample_seeds:
+            generator = torch.Generator(device='cpu').manual_seed(int(seed))
+            # Consume the matching latent draw before deriving step noise. This
+            # mirrors scripts/sample_fixed_seeds.py and keeps NFE=1/2 paired.
+            torch.randn(shape, generator=generator, dtype=torch.float64)
+            for index in range(intermediate_steps):
+                seeded_noises[index].append(
+                    torch.randn(shape, generator=generator, dtype=torch.float64)
+                )
+        step_noises = [torch.stack(items).to(latents.device) for items in seeded_noises]
 
     # Sampling steps 
     x = latents.to(torch.float64) * t_steps[0]
@@ -309,6 +342,8 @@ def evaluation(
     resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
     mid_t               = None,     # Intermediate t for few-step generation.
     metrics             = None,     # Metrics for evaluation.
+    metric_repeats      = 3,        # Number of deterministic repeats per metric.
+    sample_seeds        = None,     # Explicit per-sample seeds for proxy metrics.
     cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
     device              = torch.device('cuda'),
 ):
@@ -378,11 +413,12 @@ def evaluation(
         del images
 
     dist.print0('Evaluating few-step generation...')
-    for _ in range(3):
+    for _ in range(metric_repeats):
         for metric in metrics:
             result_dict = metric_main.calc_metric(metric=metric, 
                 generator_fn=few_step_fn, G=net, G_kwargs={},
-                dataset_kwargs=dataset_kwargs, num_gpus=dist.get_world_size(), rank=dist.get_rank(), device=device)
+                dataset_kwargs=dataset_kwargs, num_gpus=dist.get_world_size(), rank=dist.get_rank(), device=device,
+                sample_seeds=sample_seeds, metric_seed=seed)
             if dist.get_rank() == 0:
                 metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=f'{resume_pkl}')
 

@@ -294,6 +294,41 @@ class RunnerInfraTests(unittest.TestCase):
             r"OUTDIR=.*/adaptive-v1-dry-run-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
         )
 
+    def test_dry_run_accepts_final_matrix_seed_one(self):
+        completed = subprocess.run(
+            [
+                "bash", str(RUNNER),
+                "--schedule", "sigmoid",
+                "--mode", "dry-run",
+                "--seed", "1",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("seed=1", completed.stdout)
+        self.assertIn("--seed=1", completed.stdout)
+        self.assertRegex(
+            completed.stdout,
+            r"OUTDIR=.*/sigmoid-dry-run-seed1-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
+        )
+
+    def test_runner_rejects_seed_outside_final_matrix(self):
+        completed = subprocess.run(
+            [
+                "bash", str(RUNNER),
+                "--schedule", "sigmoid",
+                "--mode", "dry-run",
+                "--seed", "3",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--seed {0|1|2}", completed.stderr)
+
     def test_runner_has_no_tee_append(self):
         text = RUNNER.read_text(encoding="utf-8")
         # Only count real pipeline usage, not commentary.

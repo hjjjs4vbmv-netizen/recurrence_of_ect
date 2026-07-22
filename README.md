@@ -102,6 +102,11 @@ bash scripts/evaluate_checkpoint.sh 1 <PORT> <CKPT_PATH> \
   --nfe=2 --mid_t=0.821 --metrics=fid50k_full
 ```
 
+The frozen three-training-seed final comparison uses explicit per-sample seeds,
+KID-5k as the primary proxy, FID-5k as an auxiliary proxy, and a method-blinded
+A/B ballot. See [`docs/FINAL_PERFORMANCE_EVALUATION.md`](docs/FINAL_PERFORMANCE_EVALUATION.md).
+These 5k-sample results are not standard FID-50k benchmarks.
+
 ## Generative Performance
 
 ### FID Evaluation
