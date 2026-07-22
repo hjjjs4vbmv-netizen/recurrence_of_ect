@@ -24,11 +24,12 @@ Before formal evaluation, use the two existing seed0/16 kimg checkpoints:
 - FP32;
 - 512 generated samples with explicit sampling seeds 0-511;
 - `kid512_full` and `fid512_full`;
-- two exact repeats per checkpoint/NFE.
+- two repeats per checkpoint/NFE.
 
 The smoke collector fails unless all four checkpoint/NFE cells finish, every
 metric has exactly two results, the declared image count equals the sampling
-seed count, and repeat values match exactly. The run manifest records method,
+seed count, and repeat values agree within 1 ppm relative tolerance (with
+bitwise equality reported separately). The run manifest records method,
 training seed, budget, NFE, checkpoint SHA256, dataset SHA256, sampling seeds,
 precision, metric seed, and reference feature extractor.
 

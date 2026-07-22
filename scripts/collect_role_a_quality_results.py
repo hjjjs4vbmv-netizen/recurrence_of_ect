@@ -45,7 +45,11 @@ def metric_family(metric_name: str) -> str:
     fail(f"unsupported metric in Role A run: {metric_name}")
 
 
-def read_metric(path: Path, metric_name: str, repeats: int) -> tuple[float, bool]:
+REPEAT_REL_TOL = 1e-6
+REPEAT_ABS_TOL = 1e-12
+
+
+def read_metric(path: Path, metric_name: str, repeats: int) -> tuple[float, bool, bool]:
     if not path.is_file():
         fail(f"missing metric output: {path}")
     lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -63,8 +67,17 @@ def read_metric(path: Path, metric_name: str, repeats: int) -> tuple[float, bool
         if not math.isfinite(value):
             fail(f"non-finite metric value in {path}: {value}")
         values.append(value)
-    consistent = all(value == values[0] for value in values[1:])
-    return values[0], consistent
+    exact = all(value == values[0] for value in values[1:])
+    numerically_consistent = all(
+        math.isclose(
+            value,
+            values[0],
+            rel_tol=REPEAT_REL_TOL,
+            abs_tol=REPEAT_ABS_TOL,
+        )
+        for value in values[1:]
+    )
+    return values[0], exact, numerically_consistent
 
 
 def validate_manifest(manifest: dict) -> None:
@@ -91,7 +104,8 @@ def collect(eval_root: Path) -> tuple[list[dict], dict]:
     manifest = load_json(eval_root / "run_manifest.json")
     validate_manifest(manifest)
     rows = []
-    repeat_checks = []
+    repeat_exact_checks = []
+    repeat_consistency_checks = []
     expected_metric_names = list(manifest["metric_names"])
     for job in manifest.get("jobs", []):
         if job.get("status") != "completed":
@@ -111,11 +125,12 @@ def collect(eval_root: Path) -> tuple[list[dict], dict]:
         values = {"KID": None, "FID": None}
         for metric_name in expected_metric_names:
             metric_path = Path(job["output_directory"]) / f"metric-{metric_name}.jsonl"
-            value, consistent = read_metric(
+            value, exact, numerically_consistent = read_metric(
                 metric_path, metric_name, int(job["metric_repeats"])
             )
             values[metric_family(metric_name)] = value
-            repeat_checks.append(consistent)
+            repeat_exact_checks.append(exact)
+            repeat_consistency_checks.append(numerically_consistent)
         rows.append({
             "Method": job["method"],
             "Train seed": int(job["training_seed"]),
@@ -130,8 +145,11 @@ def collect(eval_root: Path) -> tuple[list[dict], dict]:
     expected_jobs = 4 if phase == "smoke" else 12
     if len(rows) != expected_jobs:
         fail(f"{phase} run must contain {expected_jobs} independent cells, found {len(rows)}")
-    if phase == "smoke" and not all(repeat_checks):
-        fail("smoke metric repeats are not exactly reproducible")
+    if phase == "smoke" and not all(repeat_consistency_checks):
+        fail(
+            "smoke metric repeats are not numerically reproducible within "
+            f"rel_tol={REPEAT_REL_TOL:g}, abs_tol={REPEAT_ABS_TOL:g}"
+        )
 
     summary = {
         "schema_version": 1,
@@ -147,7 +165,10 @@ def collect(eval_root: Path) -> tuple[list[dict], dict]:
         "feature_detector_url": manifest["feature_detector_url"],
         "reference_identity_consistent": True,
         "image_count_valid": True,
-        "repeat_results_exact": all(repeat_checks),
+        "repeat_results_exact": all(repeat_exact_checks),
+        "repeat_results_numerically_consistent": all(repeat_consistency_checks),
+        "repeat_relative_tolerance": REPEAT_REL_TOL,
+        "repeat_absolute_tolerance": REPEAT_ABS_TOL,
         "row_count": len(rows),
         "rows": rows,
     }
@@ -187,7 +208,11 @@ def write_outputs(outdir: Path, rows: list[dict], summary: dict) -> None:
         "",
         f"Reference identity consistent: {summary['reference_identity_consistent']}; "
         f"image count valid: {summary['image_count_valid']}; "
-        f"repeat results exact: {summary['repeat_results_exact']}.",
+        f"repeat results exact: {summary['repeat_results_exact']}; "
+        "repeat results numerically consistent: "
+        f"{summary['repeat_results_numerically_consistent']} "
+        f"(rel_tol={summary['repeat_relative_tolerance']:g}, "
+        f"abs_tol={summary['repeat_absolute_tolerance']:g}).",
         "",
     ])
     (outdir / "role_a_metrics.md").write_text("\n".join(lines), encoding="utf-8")

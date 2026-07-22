@@ -131,7 +131,26 @@ class RoleAQualityEvaluationTest(unittest.TestCase):
             self.assertEqual(len(rows), 4)
             summary = json.loads((outdir / "role_a_metrics.json").read_text())
             self.assertTrue(summary["repeat_results_exact"])
+            self.assertTrue(summary["repeat_results_numerically_consistent"])
             self.assertTrue(summary["reference_identity_consistent"])
+
+    def test_collector_accepts_roundoff_but_records_nonexact_repeats(self):
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "metric-kid512_full.jsonl"
+            payloads = [
+                {"metric": "kid512_full", "results": {"kid512_full": value}}
+                for value in (0.5, 0.5000001)
+            ]
+            path.write_text(
+                "".join(json.dumps(payload) + "\n" for payload in payloads),
+                encoding="utf-8",
+            )
+            value, exact, consistent = collect_role_a_quality_results.read_metric(
+                path, "kid512_full", 2
+            )
+            self.assertEqual(value, 0.5)
+            self.assertFalse(exact)
+            self.assertTrue(consistent)
 
 
 if __name__ == "__main__":
