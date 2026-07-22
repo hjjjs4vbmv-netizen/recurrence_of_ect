@@ -272,7 +272,7 @@ class RunnerInfraTests(unittest.TestCase):
         self.assertIn("--mapping=sigmoid", completed.stdout)
         self.assertRegex(
             completed.stdout,
-            r"OUTDIR=.*/sigmoid-dry-run-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
+            r"OUTDIR=.*/sigmoid-dry-run-seed0-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
         )
 
     def test_dry_run_adaptive_outdir_slug(self):
@@ -291,8 +291,47 @@ class RunnerInfraTests(unittest.TestCase):
         self.assertIn("schedule_slug=adaptive-v1", completed.stdout)
         self.assertRegex(
             completed.stdout,
-            r"OUTDIR=.*/adaptive-v1-dry-run-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
+            r"OUTDIR=.*/adaptive-v1-dry-run-seed0-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
         )
+
+    def test_dry_run_custom_seed_is_recorded_and_isolated(self):
+        env = os.environ.copy()
+        env["ECT_DATA_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.zip"
+        env["ECT_TRANSFER_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.pkl"
+        env["ECT_RUNS_ROOT"] = "/tmp/paired-runs"
+        completed = subprocess.run(
+            [
+                "bash",
+                str(RUNNER),
+                "--schedule",
+                "adaptive_v1",
+                "--mode",
+                "dry-run",
+                "--seed",
+                "2",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("seed=2", completed.stdout)
+        self.assertIn("--seed=2", completed.stdout)
+        self.assertRegex(
+            completed.stdout,
+            r"OUTDIR=.*/adaptive-v1-dry-run-seed2-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
+        )
+
+    def test_invalid_seed_is_rejected(self):
+        completed = subprocess.run(
+            ["bash", str(RUNNER), "--schedule", "sigmoid", "--mode", "dry-run", "--seed", "-1"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--seed must be a non-negative integer", completed.stderr)
 
     def test_runner_has_no_tee_append(self):
         text = RUNNER.read_text(encoding="utf-8")

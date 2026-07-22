@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 # Paired experiment runner (Role B) — owner of fixed/adaptive comparison infra.
-# Same frozen hyperparameters for both schedules; only --schedule (and Role C
-# adaptive-internal knobs once available) may differ.
+# Same frozen hyperparameters apply to both schedules within a training seed.
+# --seed selects a paired training replicate; only --schedule (and Role C
+# adaptive-internal knobs once available) may differ within that replicate.
 #
 # Duration (Mimg) → total_kimg = int(duration * 1000); discrete batch completion
 #   activation 0.004 → 4 kimg target → 32 attempted iterations @ batch 128 (4096 images)
@@ -22,6 +23,7 @@ MODE=""
 SCHEDULE=""
 RESUME=""
 OUTDIR_OVERRIDE=""
+SEED=0
 
 usage() {
     cat <<'EOF'
@@ -29,6 +31,7 @@ Usage:
   bash scripts/run_schedule_experiment.sh \
     --schedule {sigmoid|adaptive_v1} \
     --mode {dry-run|activation|stability|baseline} \
+    [--seed INT] \
     [--outdir DIR] \
     [--resume PATH_TO_training-state.pt]
 
@@ -40,8 +43,8 @@ Usage:
 Fresh runs:
   - Pass --transfer only (never --resume)
   - Default outdir:
-      $ECT_RUNS_ROOT/<schedule>-<mode>-<gitsha>-<timestamp>/
-      e.g. sigmoid-stability-ad05dc47-20260717T084500Z/
+      $ECT_RUNS_ROOT/<schedule>-<mode>-seed<seed>-<gitsha>-<timestamp>/
+      e.g. sigmoid-stability-seed0-ad05dc47-20260717T084500Z/
   - If --outdir is set, it must be empty (or not exist); otherwise the run fails.
   - Never appends to old logs; never reuses a non-empty directory.
 
@@ -166,6 +169,10 @@ while [[ $# -gt 0 ]]; do
             OUTDIR_OVERRIDE="${2:-}"
             shift 2
             ;;
+        --seed)
+            SEED="${2:-}"
+            shift 2
+            ;;
         --resume)
             RESUME="${2:-}"
             shift 2
@@ -209,6 +216,8 @@ case "$MODE" in
         ;;
 esac
 
+[[ "$SEED" =~ ^[0-9]+$ ]] || fail "--seed must be a non-negative integer"
+
 # Frozen paired knobs — identical for sigmoid and adaptive_v1.
 DATA="${ECT_DATA_PATH:-/mnt/ect_project/datasets/cifar10-32x32.zip}"
 TRANSFER="${ECT_TRANSFER_PATH:-/mnt/ect_project/pretrained/edm-cifar10-32x32-uncond-vp.pkl}"
@@ -229,7 +238,6 @@ B=1
 C=0
 DOUBLE=10000
 EMA_BETA=0.9993
-SEED=0
 FP16=True
 ENABLE_AMP=True
 METRICS=none
@@ -254,8 +262,8 @@ resolve_outdir() {
         OUTDIR="${OUTDIR_OVERRIDE}"
         return
     fi
-    # Unique per (schedule, mode, commit, time): never mixes sigmoid with adaptive_v1.
-    OUTDIR="${RUNS_ROOT}/${SCHEDULE_SLUG}-${MODE}-${GIT_SHA_SHORT}-${RUN_STAMP}"
+    # Unique per arm (schedule, seed, mode, commit, time): never mixes paired runs.
+    OUTDIR="${RUNS_ROOT}/${SCHEDULE_SLUG}-${MODE}-seed${SEED}-${GIT_SHA_SHORT}-${RUN_STAMP}"
 }
 
 build_cmd() {
@@ -350,8 +358,9 @@ assert_resume_identity_gate() {
     local meta_path="${OUTDIR}/run_meta.env"
     [[ -f "${meta_path}" ]] || fail "resume requires immutable run_meta.env: ${meta_path}"
 
-    local meta_schedule meta_head meta_dirty meta_data_sha meta_transfer_sha
+    local meta_schedule meta_seed meta_head meta_dirty meta_data_sha meta_transfer_sha
     meta_schedule="$(read_meta_value "${meta_path}" schedule)"
+    meta_seed="$(read_meta_value "${meta_path}" seed)"
     meta_head="$(read_meta_value "${meta_path}" git_head)"
     meta_dirty="$(read_meta_value "${meta_path}" git_dirty)"
     meta_data_sha="$(read_meta_value "${meta_path}" data_sha256)"
@@ -361,6 +370,12 @@ assert_resume_identity_gate() {
     [[ -n "${meta_head}" && "${meta_head}" != "unknown" ]] || fail "run_meta.env missing git_head"
     [[ -n "${meta_data_sha}" && "${meta_data_sha}" != "missing" ]] || fail "run_meta.env missing data_sha256"
     [[ -n "${meta_transfer_sha}" && "${meta_transfer_sha}" != "missing" ]] || fail "run_meta.env missing transfer_sha256"
+
+    # Metadata predating explicit seed support represents the historical fixed
+    # default (seed 0), and may only resume with that seed.
+    meta_seed="${meta_seed:-0}"
+    [[ "${meta_seed}" == "${SEED}" ]] || fail \
+        "resume seed mismatch: outdir seed=${meta_seed} vs --seed=${SEED}"
 
     if [[ "${meta_schedule}" != "${SCHEDULE}" ]]; then
         fail "refuse mixed-schedule resume: outdir schedule=${meta_schedule} vs --schedule=${SCHEDULE}"
