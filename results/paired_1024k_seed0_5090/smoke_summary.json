@@ -1,0 +1,243 @@
+{
+  "arms": {
+    "adaptive_v1": {
+      "checkpoint_id": "network-snapshot-000032-7aa95fe6c44e",
+      "checkpoint_path": "/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/adaptive-b-1024k-seed0/network-snapshot-000032.pkl",
+      "checkpoint_sha256": "7aa95fe6c44e0cc4b16eb030bc5bdf7869ee2d5a3176692530c251c172e0d908",
+      "determinism_passed": true,
+      "device": "cuda",
+      "elapsed_seconds_by_mode": {
+        "nfe1": 2.894683,
+        "nfe2": 4.607885
+      },
+      "elapsed_seconds_total": 7.502614,
+      "evaluation_git_commit": "6fdcc54472b1cbc0b3e5d9c649df850b8969ead4",
+      "generator_implementation": "ct_eval.generator_fn",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "image_channels": 3,
+      "image_count_by_mode": {
+        "nfe1": 64,
+        "nfe2": 64
+      },
+      "image_count_total": 128,
+      "image_resolution": [
+        32,
+        32
+      ],
+      "mid_t_by_mode": {
+        "nfe1": [],
+        "nfe2": [
+          0.821
+        ]
+      },
+      "model_forward_batch_size": 1,
+      "nfe_modes": [
+        1,
+        2
+      ],
+      "output_directory": "/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/evaluation-pr19-protocol/smoke/adaptive_v1/network-snapshot-000032-7aa95fe6c44e",
+      "precision": "fp32",
+      "precision_requested": "fp32",
+      "repeat_runs_verified": 2,
+      "schema_version": "1.0",
+      "seed_count": 64,
+      "seed_list": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "verified_modes": [
+        "nfe1",
+        "nfe2"
+      ],
+      "work_group_sizes_verified": [
+        8,
+        16
+      ]
+    },
+    "sigmoid": {
+      "checkpoint_id": "network-snapshot-000032-a54f3df77644",
+      "checkpoint_path": "/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/sigmoid-1024k-seed0/network-snapshot-000032.pkl",
+      "checkpoint_sha256": "a54f3df776442c303f5b22a24541a5446e3ce62f05c71a7efe5d0e6747b04ceb",
+      "determinism_passed": true,
+      "device": "cuda",
+      "elapsed_seconds_by_mode": {
+        "nfe1": 2.917045,
+        "nfe2": 4.769487
+      },
+      "elapsed_seconds_total": 7.686582,
+      "evaluation_git_commit": "6fdcc54472b1cbc0b3e5d9c649df850b8969ead4",
+      "generator_implementation": "ct_eval.generator_fn",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "image_channels": 3,
+      "image_count_by_mode": {
+        "nfe1": 64,
+        "nfe2": 64
+      },
+      "image_count_total": 128,
+      "image_resolution": [
+        32,
+        32
+      ],
+      "mid_t_by_mode": {
+        "nfe1": [],
+        "nfe2": [
+          0.821
+        ]
+      },
+      "model_forward_batch_size": 1,
+      "nfe_modes": [
+        1,
+        2
+      ],
+      "output_directory": "/mnt/ect_project/runs/paired-1024k-5090/main-4b80a4f7-seed0-w32-a001-20260722T100054Z/evaluation-pr19-protocol/smoke/sigmoid/network-snapshot-000032-a54f3df77644",
+      "precision": "fp32",
+      "precision_requested": "fp32",
+      "repeat_runs_verified": 2,
+      "schema_version": "1.0",
+      "seed_count": 64,
+      "seed_list": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "verified_modes": [
+        "nfe1",
+        "nfe2"
+      ],
+      "work_group_sizes_verified": [
+        8,
+        16
+      ]
+    }
+  },
+  "checks": {
+    "determinism": true,
+    "precision": "fp32",
+    "seed_count_each_mode": 64,
+    "seeds": "0-63"
+  },
+  "status": "PASS"
+}

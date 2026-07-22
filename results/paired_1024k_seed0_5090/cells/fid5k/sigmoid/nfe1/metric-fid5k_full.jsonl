@@ -1,0 +1,1 @@
+{"results": {"fid5k_full": 15.536607826409384}, "metric": "fid5k_full", "total_time": 25.15752077102661, "total_time_str": "25s", "num_gpus": 1, "snapshot_pkl": "../../../../sigmoid-1024k-seed0/network-snapshot-000032.pkl", "timestamp": 1784731370.3620164}

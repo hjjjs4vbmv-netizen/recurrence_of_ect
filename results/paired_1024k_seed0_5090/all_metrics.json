@@ -1,0 +1,26 @@
+{
+  "fid5k_nfe1": {
+    "adaptive_v1": 16.67336946594076,
+    "delta_adaptive_minus_sigmoid": 1.1367616395313753,
+    "relative_delta_percent": 7.316665595427395,
+    "sigmoid": 15.536607826409384
+  },
+  "fid5k_nfe2": {
+    "adaptive_v1": 8.329946889195318,
+    "delta_adaptive_minus_sigmoid": 0.19403942157295262,
+    "relative_delta_percent": 2.3849757675483816,
+    "sigmoid": 8.135907467622365
+  },
+  "kid5k_nfe1": {
+    "adaptive_v1": 0.00723601015015015,
+    "delta_adaptive_minus_sigmoid": 0.0004496826526526679,
+    "relative_delta_percent": 6.626303443482389,
+    "sigmoid": 0.006786327497497482
+  },
+  "kid5k_nfe2": {
+    "adaptive_v1": 0.00141295428428426,
+    "delta_adaptive_minus_sigmoid": -0.00032765863363366874,
+    "relative_delta_percent": -18.824325055889197,
+    "sigmoid": 0.0017406129179179288
+  }
+}

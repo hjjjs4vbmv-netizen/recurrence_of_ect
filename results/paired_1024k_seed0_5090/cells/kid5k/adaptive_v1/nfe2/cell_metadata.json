@@ -1,0 +1,14 @@
+{
+  "checkpoint_sha256": "7aa95fe6c44e0cc4b16eb030bc5bdf7869ee2d5a3176692530c251c172e0d908",
+  "generated_sample_count": 5000,
+  "metric": "kid5k_full",
+  "mid_t": 0.821,
+  "nfe": 2,
+  "peak_gpu_memory_mib": null,
+  "peak_gpu_memory_note": "Not emitted by the frozen PR #19 metric entrypoint.",
+  "precision": "fp32",
+  "runtime_seconds": 32.413949966430664,
+  "sample_seeds": "0-4999",
+  "status": "PASS",
+  "value": 0.00141295428428426
+}

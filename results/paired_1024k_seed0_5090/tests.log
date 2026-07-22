@@ -1,0 +1,38 @@
+evaluation_commit=6fdcc54472b1cbc0b3e5d9c649df850b8969ead4
+[ect5090-compat] enabled legacy Sampler(data_source) no-op init
+test_blind_ballot_is_balanced_and_scores_complete_raters (tests.test_final_evaluation.FinalEvaluationTest.test_blind_ballot_is_balanced_and_scores_complete_raters) ... ok
+test_frozen_runner_builds_exact_matrix (tests.test_final_evaluation.FinalEvaluationTest.test_frozen_runner_builds_exact_matrix) ... ok
+test_one_page_conclusion_uses_locked_primary_direction (tests.test_final_evaluation.FinalEvaluationTest.test_one_page_conclusion_uses_locked_primary_direction) ... ok
+test_quantitative_collector_preserves_pairing (tests.test_final_evaluation.FinalEvaluationTest.test_quantitative_collector_preserves_pairing) ... ok
+test_stability_and_final_conclusion_builders (tests.test_final_evaluation.FinalEvaluationTest.test_stability_and_final_conclusion_builders) ... ok
+test_checkpoint_id_uses_filename_and_sha_prefix (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_checkpoint_id_uses_filename_and_sha_prefix) ... ok
+test_generator_sample_seeds_match_explicit_step_noise (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_generator_sample_seeds_match_explicit_step_noise) ... ok
+test_manifest_covers_images_grids_and_metadata (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_manifest_covers_images_grids_and_metadata) ... /root/autodl-tmp/work/recurrence_of_ect-eval-pr19/scripts/sample_fixed_seeds.py:116: DeprecationWarning: 'mode' parameter is deprecated and will be removed in Pillow 13 (2026-10-15)
+  PIL.Image.fromarray(image.transpose(1, 2, 0), mode="RGB").save(path)
+/root/autodl-tmp/work/recurrence_of_ect-eval-pr19/scripts/sample_fixed_seeds.py:126: DeprecationWarning: 'mode' parameter is deprecated and will be removed in Pillow 13 (2026-10-15)
+  PIL.Image.fromarray(grid, mode="RGB").save(path)
+ok
+test_metadata_records_nfe_mid_t_and_required_schema (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_metadata_records_nfe_mid_t_and_required_schema) ... ok
+test_metric_latents_match_fixed_seed_sampler (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_metric_latents_match_fixed_seed_sampler) ... ok
+test_precision_is_explicit_and_reported (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_precision_is_explicit_and_reported) ... ok
+test_protocol_outputs_are_complete_rgb_images (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_protocol_outputs_are_complete_rgb_images) ... /root/autodl-tmp/work/recurrence_of_ect-eval-pr19/scripts/sample_fixed_seeds.py:116: DeprecationWarning: 'mode' parameter is deprecated and will be removed in Pillow 13 (2026-10-15)
+  PIL.Image.fromarray(image.transpose(1, 2, 0), mode="RGB").save(path)
+/root/autodl-tmp/work/recurrence_of_ect-eval-pr19/scripts/sample_fixed_seeds.py:126: DeprecationWarning: 'mode' parameter is deprecated and will be removed in Pillow 13 (2026-10-15)
+  PIL.Image.fromarray(grid, mode="RGB").save(path)
+ok
+test_repeated_png_sha256_is_identical (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_repeated_png_sha256_is_identical) ... ok
+test_repeated_runs_are_pixel_identical_for_nfe1_and_nfe2 (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_repeated_runs_are_pixel_identical_for_nfe1_and_nfe2) ... ok
+test_same_seed_shares_initial_latent_and_deterministic_noise (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_same_seed_shares_initial_latent_and_deterministic_noise) ... ok
+test_seed_zero_and_one_are_distinct (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_seed_zero_and_one_are_distinct) ... ok
+test_work_groups_are_pixel_identical_for_nfe1_and_nfe2 (tests.test_fixed_seed_sampling.FixedSeedSamplingTest.test_work_groups_are_pixel_identical_for_nfe1_and_nfe2) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 9.984s
+
+OK
+Built 96 blinded trials in /tmp/tmp6mt90oi_/public
+Keep private until ballots lock: /tmp/tmp6mt90oi_/private/key.csv
+Scored 288 judgments from 3 complete raters
+Final conclusion: /tmp/tmpjwnv4ox4/FINAL_CONCLUSION.md
+Validated 12 cells; primary metric: kid5k_full; output: /tmp/tmpyonkstcw/summary
+Validated six 16 kimg training runs; output: /tmp/tmp_l84b7ud/summary

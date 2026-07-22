@@ -1,0 +1,1 @@
+{"results": {"kid5k_full": 0.00141295428428426}, "metric": "kid5k_full", "total_time": 32.413949966430664, "total_time_str": "32s", "num_gpus": 1, "snapshot_pkl": "../../../../adaptive-b-1024k-seed0/network-snapshot-000032.pkl", "timestamp": 1784731323.3583071}

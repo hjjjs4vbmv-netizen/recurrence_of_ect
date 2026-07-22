@@ -1,0 +1,5 @@
+arm,metric,value,runtime_seconds,checkpoint_sha256,sample_seeds,generated_sample_count,precision,nfe,mid_t,status,peak_gpu_memory_mib,peak_gpu_memory_note
+sigmoid,kid5k_full,0.006786327497497482,28.864728212356567,a54f3df776442c303f5b22a24541a5446e3ce62f05c71a7efe5d0e6747b04ceb,0-4999,5000,fp32,1,,PASS,,Not emitted by the frozen PR #19 metric entrypoint.
+adaptive_v1,kid5k_full,0.00723601015015015,28.974271059036255,7aa95fe6c44e0cc4b16eb030bc5bdf7869ee2d5a3176692530c251c172e0d908,0-4999,5000,fp32,1,,PASS,,Not emitted by the frozen PR #19 metric entrypoint.
+sigmoid,kid5k_full,0.0017406129179179288,32.29677963256836,a54f3df776442c303f5b22a24541a5446e3ce62f05c71a7efe5d0e6747b04ceb,0-4999,5000,fp32,2,0.821,PASS,,Not emitted by the frozen PR #19 metric entrypoint.
+adaptive_v1,kid5k_full,0.00141295428428426,32.413949966430664,7aa95fe6c44e0cc4b16eb030bc5bdf7869ee2d5a3176692530c251c172e0d908,0-4999,5000,fp32,2,0.821,PASS,,Not emitted by the frozen PR #19 metric entrypoint.
