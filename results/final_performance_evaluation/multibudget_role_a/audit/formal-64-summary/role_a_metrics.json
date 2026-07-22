@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "protocol": "role-a-multibudget-quality-v1",
+  "phase": "formal",
+  "metric_mode": "both",
+  "sample_count_per_checkpoint_nfe": 5000,
+  "sample_seeds": "0-4999",
+  "precision": "fp32",
+  "dataset": "/mnt/ect_project/datasets/cifar10-32x32.zip",
+  "dataset_sha256": "08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372",
+  "reference_real_count": 50000,
+  "feature_detector_url": "https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/inception-2015-12-05.pt",
+  "reference_identity_consistent": true,
+  "image_count_valid": true,
+  "repeat_results_exact": true,
+  "repeat_results_numerically_consistent": true,
+  "repeat_relative_tolerance": 1e-06,
+  "repeat_absolute_tolerance": 1e-12,
+  "row_count": 12,
+  "rows": [
+    {
+      "Method": "sigmoid",
+      "Train seed": 0,
+      "Budget": 64,
+      "NFE": 1,
+      "KID": 0.4878055155277252,
+      "FID": 429.5904741914846,
+      "Checkpoint SHA": "514b67696ca911ccdd9e16c5cce93d91e2c2c77433a82a2c2b8c0ae0b410dc9f"
+    },
+    {
+      "Method": "sigmoid",
+      "Train seed": 0,
+      "Budget": 64,
+      "NFE": 2,
+      "KID": 0.4059482514858246,
+      "FID": 364.87099871412147,
+      "Checkpoint SHA": "514b67696ca911ccdd9e16c5cce93d91e2c2c77433a82a2c2b8c0ae0b410dc9f"
+    },
+    {
+      "Method": "adaptive_v1",
+      "Train seed": 0,
+      "Budget": 64,
+      "NFE": 1,
+      "KID": 0.48724865913391113,
+      "FID": 429.7458044055775,
+      "Checkpoint SHA": "dc5fdcac27f49e845eae1d28571cd0c3be6756aa6aee785e3189c1c27f527aa3"
+    },
+    {
+      "Method": "adaptive_v1",
+      "Train seed": 0,
+      "Budget": 64,
+      "NFE": 2,
+      "KID": 0.4068980813026428,
+      "FID": 365.5074929430672,
+      "Checkpoint SHA": "dc5fdcac27f49e845eae1d28571cd0c3be6756aa6aee785e3189c1c27f527aa3"
+    },
+    {
+      "Method": "sigmoid",
+      "Train seed": 1,
+      "Budget": 64,
+      "NFE": 1,
+      "KID": 0.4751233458518982,
+      "FID": 418.23088510630885,
+      "Checkpoint SHA": "bb98925649c0267064210a069887ae9b5dd3eff26727651318818ac2d46c09f9"
+    },
+    {
+      "Method": "sigmoid",
+      "Train seed": 1,
+      "Budget": 64,
+      "NFE": 2,
+      "KID": 0.28407230973243713,
+      "FID": 270.97941291841283,
+      "Checkpoint SHA": "bb98925649c0267064210a069887ae9b5dd3eff26727651318818ac2d46c09f9"
+    },
+    {
+      "Method": "adaptive_v1",
+      "Train seed": 1,
+      "Budget": 64,
+      "NFE": 1,
+      "KID": 0.4754484295845032,
+      "FID": 418.42141522198887,
+      "Checkpoint SHA": "c1eaef2c89c1365aa5c3e5b65c8522152468bf213923004c299ac6a058fddbdf"
+    },
+    {
+      "Method": "adaptive_v1",
+      "Train seed": 1,
+      "Budget": 64,
+      "NFE": 2,
+      "KID": 0.27491092681884766,
+      "FID": 263.31739343516506,
+      "Checkpoint SHA": "c1eaef2c89c1365aa5c3e5b65c8522152468bf213923004c299ac6a058fddbdf"
+    },
+    {
+      "Method": "sigmoid",
+      "Train seed": 2,
+      "Budget": 64,
+      "NFE": 1,
+      "KID": 0.5190601348876953,
+      "FID": 437.3195436021108,
+      "Checkpoint SHA": "73c5b0c7b3e5130a76f80d26cb30e6969d049d941ac0e6568ee16f7c1d5bc925"
+    },
+    {
+      "Method": "sigmoid",
+      "Train seed": 2,
+      "Budget": 64,
+      "NFE": 2,
+      "KID": 0.428162544965744,
+      "FID": 377.60478135599294,
+      "Checkpoint SHA": "73c5b0c7b3e5130a76f80d26cb30e6969d049d941ac0e6568ee16f7c1d5bc925"
+    },
+    {
+      "Method": "adaptive_v1",
+      "Train seed": 2,
+      "Budget": 64,
+      "NFE": 1,
+      "KID": 0.5199764966964722,
+      "FID": 437.9850438086264,
+      "Checkpoint SHA": "3f3b4a69dec396d4af1010c6c26323d442e64b60fd3c7b354c4820c60aae1157"
+    },
+    {
+      "Method": "adaptive_v1",
+      "Train seed": 2,
+      "Budget": 64,
+      "NFE": 2,
+      "KID": 0.4338109493255615,
+      "FID": 380.97130757057425,
+      "Checkpoint SHA": "3f3b4a69dec396d4af1010c6c26323d442e64b60fd3c7b354c4820c60aae1157"
+    }
+  ]
+}

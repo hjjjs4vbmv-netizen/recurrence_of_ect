@@ -1,0 +1,40 @@
+{
+  "adaptive_correction_activated": true,
+  "amp_skipped_steps": 9,
+  "attempted_iterations": 500,
+  "checkpoints": {
+    "16": {
+      "kimg": 16,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/network-snapshot-kimg0016.pkl",
+      "network_snapshot_sha256": "b7bc291a80298121c091945519d79f1f8c79deb318b4790e2d7371a1510b7a13",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/training-state-kimg0016.pt",
+      "training_state_sha256": "d025a8dc99f9d7263554e5600b39c356e0a4005a9af99776c011710f06d33a81"
+    },
+    "32": {
+      "kimg": 32,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/network-snapshot-kimg0032.pkl",
+      "network_snapshot_sha256": "610f353f4afeebee9e4ab12ee1fa170365d0bb42d138aa0a06c0c087bc4e577e",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/training-state-kimg0032.pt",
+      "training_state_sha256": "c6dafe8ea6b63ef24a4488203522e97b5fc9b1dc926e34208e6aea34469dd7a1"
+    },
+    "64": {
+      "kimg": 64,
+      "network_snapshot": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/network-snapshot-kimg0064.pkl",
+      "network_snapshot_sha256": "c1eaef2c89c1365aa5c3e5b65c8522152468bf213923004c299ac6a058fddbdf",
+      "training_state": "/root/ect-runs/paired-training-v1-canonical/adaptive-v1-traj64-5344a5c9-20260722T064507Z-seed1/training-state-kimg0064.pt",
+      "training_state_sha256": "76757a431ea0886fbe919b5c2c0a249028a1511544efa182c6666d0623fe5783"
+    }
+  },
+  "expected_attempted_at_64": 500,
+  "final_adaptive_active": true,
+  "final_correction": -6.1981075949e-05,
+  "final_signal_updates": 128,
+  "inf_count": 0,
+  "nan_count": 0,
+  "processed_kimg": 64.0,
+  "reached_64_kimg": true,
+  "rt_gap_always_legal": true,
+  "successful_optimizer_steps": 491,
+  "trailing25_mean": 16.4695864772,
+  "trailing25_std": 0.9582064148191193
+}

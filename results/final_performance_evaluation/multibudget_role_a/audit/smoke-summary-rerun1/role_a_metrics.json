@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "protocol": "role-a-multibudget-quality-v1",
+  "phase": "smoke",
+  "metric_mode": "both",
+  "sample_count_per_checkpoint_nfe": 512,
+  "sample_seeds": "0-511",
+  "precision": "fp32",
+  "dataset": "/mnt/ect_project/datasets/cifar10-32x32.zip",
+  "dataset_sha256": "08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372",
+  "reference_real_count": 50000,
+  "feature_detector_url": "https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/inception-2015-12-05.pt",
+  "reference_identity_consistent": true,
+  "image_count_valid": true,
+  "repeat_results_exact": false,
+  "repeat_results_numerically_consistent": true,
+  "repeat_relative_tolerance": 1e-06,
+  "repeat_absolute_tolerance": 1e-12,
+  "row_count": 4,
+  "rows": [
+    {
+      "Method": "sigmoid",
+      "Train seed": 0,
+      "Budget": 16,
+      "NFE": 1,
+      "KID": 0.5922718644142151,
+      "FID": 492.77894865943455,
+      "Checkpoint SHA": "32aa4661584663c40bc05a3b5c5bef3bd4e8b60e289023d491fbe46fac5478ed"
+    },
+    {
+      "Method": "sigmoid",
+      "Train seed": 0,
+      "Budget": 16,
+      "NFE": 2,
+      "KID": 0.24360528588294983,
+      "FID": 266.8666602576525,
+      "Checkpoint SHA": "32aa4661584663c40bc05a3b5c5bef3bd4e8b60e289023d491fbe46fac5478ed"
+    },
+    {
+      "Method": "adaptive_v1",
+      "Train seed": 0,
+      "Budget": 16,
+      "NFE": 1,
+      "KID": 0.595818042755127,
+      "FID": 494.23485543785796,
+      "Checkpoint SHA": "7d162808dc98deec28d269693cba4242b97e52d8431017fe9e45a54a8c3d151a"
+    },
+    {
+      "Method": "adaptive_v1",
+      "Train seed": 0,
+      "Budget": 16,
+      "NFE": 2,
+      "KID": 0.24505922198295593,
+      "FID": 267.7883448689886,
+      "Checkpoint SHA": "7d162808dc98deec28d269693cba4242b97e52d8431017fe9e45a54a8c3d151a"
+    }
+  ]
+}

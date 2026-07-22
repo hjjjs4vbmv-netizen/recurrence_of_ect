@@ -1,0 +1,1 @@
+{"results": {"kid5k_full": 0.4751233458518982}, "metric": "kid5k_full", "total_time": 29.179855346679688, "total_time_str": "29s", "num_gpus": 1, "snapshot_pkl": "../../../../../../../ect-runs/paired-training-v1-canonical/sigmoid-traj64-5344a5c9-20260722T063952Z-seed1/network-snapshot-kimg0064.pkl", "timestamp": 1784708616.5397904}
