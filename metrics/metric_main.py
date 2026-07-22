@@ -115,6 +115,27 @@ def is50k(opts):
     return dict(is50k_mean=mean, is50k_std=std)
 
 #----------------------------------------------------------------------------
+# 5k proxy metrics.
+
+@register_metric
+def fid5k_proxy(opts):
+    """FID proxy with 50k real and 5k generated samples.
+
+    The real-data population is kept at the canonical CIFAR-10 training-set
+    size, while the generated-sample budget is reduced for paired iteration.
+    """
+    opts.dataset_kwargs.update(max_size=50000, xflip=False)
+    fid = frechet_inception_distance.compute_fid(opts, max_real=50000, num_gen=5000)
+    return dict(fid5k_proxy=fid)
+
+@register_metric
+def kid5k_proxy(opts):
+    """KID proxy paired with :func:`fid5k_proxy`."""
+    opts.dataset_kwargs.update(max_size=50000, xflip=False)
+    kid = kernel_inception_distance.compute_kid(opts, max_real=50000, num_gen=5000, num_subsets=100, max_subset_size=1000)
+    return dict(kid5k_proxy=kid)
+
+#----------------------------------------------------------------------------
 # Legacy metrics.
 
 @register_metric

@@ -94,6 +94,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mid_t',         help='Sampler steps [default: 0.821]',                             multiple=True, default=[0.821])
 @click.option('--nfe',           help='Number of function evaluations',                            type=click.Choice(['1', '2']), default='2', show_default=True)
 @click.option('--metrics',       help='Comma-separated list or "none" [default: fid50k_full]',      type=CommaSeparatedList(), default='fid50k_full')
+@click.option('--metric-repeats', help='Independent calculations per metric.',                     type=click.IntRange(min=1), default=3, show_default=True)
 
 
 def main(**kwargs):
@@ -146,7 +147,11 @@ def main(**kwargs):
 
     # Trainig options.
     c.update(cudnn_benchmark=opts.bench)
-    c.update(mid_t=() if opts.nfe == '1' else opts.mid_t, metrics=opts.metrics)
+    c.update(
+        mid_t=() if opts.nfe == '1' else opts.mid_t,
+        metrics=opts.metrics,
+        metric_repeats=opts.metric_repeats,
+    )
 
     # Random seed.
     if opts.seed is not None:
@@ -309,6 +314,7 @@ def evaluation(
     resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
     mid_t               = None,     # Intermediate t for few-step generation.
     metrics             = None,     # Metrics for evaluation.
+    metric_repeats      = 3,        # Independent calculations per metric.
     cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
     device              = torch.device('cuda'),
 ):
@@ -378,7 +384,7 @@ def evaluation(
         del images
 
     dist.print0('Evaluating few-step generation...')
-    for _ in range(3):
+    for _ in range(metric_repeats):
         for metric in metrics:
             result_dict = metric_main.calc_metric(metric=metric, 
                 generator_fn=few_step_fn, G=net, G_kwargs={},
