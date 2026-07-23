@@ -231,6 +231,82 @@ class AdaptiveV1Test(unittest.TestCase):
             continuous_stage(cur_tick=1, double_ticks=0)
 
 
+class AdaptiveVarianceV1Test(unittest.TestCase):
+    def _observe_window(self, schedule):
+        t = torch.tensor([
+            math.exp(-3.0), math.exp(-3.0),
+            math.exp(-1.8), math.exp(-1.8),
+            math.exp(-0.5), math.exp(-0.5),
+            math.exp(1.0), math.exp(1.0),
+        ])
+        # Bin 0 has high normalized variance; the other bins are stable.
+        loss = torch.tensor([1.0, 9.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0])
+        schedule.observe_training_batch(loss=loss, t=t)
+        self.assertTrue(schedule.update_training_signal(loss.mean()))
+        return t
+
+    def test_without_signal_is_official_sigmoid_bitwise(self):
+        t = sample_t()
+        expected = get_schedule('sigmoid', q=256.0).compute_r(t=t, stage=2)
+        schedule = get_schedule('adaptive_variance_v1', q=256.0)
+        self.assertTrue(torch.equal(schedule.compute_r(t=t, stage=2), expected))
+
+    def test_high_variance_bin_receives_smaller_gap_scale(self):
+        schedule = get_schedule(
+            'adaptive_variance_v1', variance_ema_beta=0.0,
+            variance_strength=1.0, min_gap_scale=0.5, warmup_updates=0,
+        )
+        self._observe_window(schedule)
+        scales = schedule.gap_scales()
+        self.assertLess(scales[0], scales[3])
+        self.assertGreaterEqual(min(scales), 0.5)
+        self.assertLessEqual(max(scales), 1.0)
+        self.assertLess(schedule.correction(), 0)
+
+    def test_output_is_finite_bounded_and_preserves_shape(self):
+        schedule = get_schedule(
+            'adaptive_variance_v1', variance_ema_beta=0.0,
+            warmup_updates=0,
+        )
+        self._observe_window(schedule)
+        t = torch.tensor([0.0, 1e-8, 0.1, 1.0, 80.0, float('inf'), float('nan')])
+        r = schedule.compute_r(t=t, stage=3)
+        self.assertEqual(r.shape, t.shape)
+        self.assertTrue(torch.isfinite(r).all())
+        self.assertTrue((r >= 0).all())
+        finite = torch.isfinite(t) & (t >= 0)
+        self.assertTrue((r[finite] <= t[finite]).all())
+
+    def test_state_round_trip_preserves_controller_and_output(self):
+        source = get_schedule(
+            'adaptive_variance_v1', variance_ema_beta=0.5,
+            warmup_updates=0,
+        )
+        t = self._observe_window(source)
+        clone = get_schedule(
+            'adaptive_variance_v1', variance_ema_beta=0.5,
+            warmup_updates=0,
+        )
+        clone.load_state_dict(source.state_dict())
+        self.assertEqual(clone.metadata(), source.metadata())
+        self.assertTrue(torch.equal(
+            clone.compute_r(t=t, stage=2),
+            source.compute_r(t=t, stage=2),
+        ))
+
+    def test_invalid_parameters_are_rejected(self):
+        for kwargs in [
+            {'variance_ema_beta': 1.0},
+            {'variance_strength': -1.0},
+            {'min_gap_scale': 0.0},
+            {'num_bins': 1},
+            {'num_bins': 2.5},
+            {'p_std': 0.0},
+        ]:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                get_schedule('adaptive_variance_v1', **kwargs)
+
+
 class InterfaceTest(unittest.TestCase):
     def test_documented_call_forms_agree(self):
         t = sample_t()
@@ -251,7 +327,10 @@ class InterfaceTest(unittest.TestCase):
         self.assertAlmostEqual(float(r), 1.0)
 
     def test_available_schedules(self):
-        self.assertEqual(schedules.available_schedules(), ['adaptive_v1', 'const', 'sigmoid'])
+        self.assertEqual(
+            schedules.available_schedules(),
+            ['adaptive_v1', 'adaptive_variance_v1', 'const', 'sigmoid'],
+        )
 
     def test_unknown_schedule_rejected(self):
         with self.assertRaises(ValueError):
@@ -271,7 +350,8 @@ class ECMLossIntegrationTest(unittest.TestCase):
     def test_loss_holds_matching_schedule_instance(self):
         for adj, cls in [('const', schedules.ConstSchedule),
                          ('sigmoid', schedules.SigmoidSchedule),
-                         ('adaptive_v1', schedules.AdaptiveV1Schedule)]:
+                         ('adaptive_v1', schedules.AdaptiveV1Schedule),
+                         ('adaptive_variance_v1', schedules.AdaptiveVarianceV1Schedule)]:
             with self.subTest(adj=adj):
                 self.assertIsInstance(make_loss(adj).schedule, cls)
 
