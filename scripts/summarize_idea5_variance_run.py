@@ -82,7 +82,7 @@ def make_dynamics(rows, output):
     axes[1, 1].set(title="AMP stability", xlabel="Attempted iteration", ylabel="Grad scale")
     axes[1, 1].legend(frameon=False)
 
-    fig.suptitle("Idea 5: 200-step variance-controller diagnostic")
+    fig.suptitle(f"Idea 5: {len(rows)}-attempt variance-controller diagnostic")
     fig.savefig(output, dpi=180)
     plt.close(fig)
 
@@ -160,6 +160,11 @@ def main():
     sample_created = make_sample_comparison(run_dir, output / "sample_comparison.png")
 
     losses = np.array([float(row["loss"]) for row in rows])
+    finite_losses = losses[np.isfinite(losses)]
+    trailing_losses = losses[-25:]
+    finite_trailing_losses = trailing_losses[np.isfinite(trailing_losses)]
+    if finite_losses.size == 0:
+        raise RuntimeError("run contains no finite loss values")
     last = rows[-1]
     summary = {
         "run_dir": str(run_dir),
@@ -168,10 +173,10 @@ def main():
         "successful_optimizer_steps": int(last["successful_optimizer_steps"]),
         "skipped_steps": sum(int(row["step_skipped"]) for row in rows),
         "nonfinite_loss_count": int((~np.isfinite(losses)).sum()),
-        "loss_mean": float(np.mean(losses)),
-        "loss_std": float(np.std(losses)),
-        "trailing_25_loss_mean": float(np.mean(losses[-25:])),
-        "trailing_25_loss_std": float(np.std(losses[-25:])),
+        "loss_mean": float(np.mean(finite_losses)),
+        "loss_std": float(np.std(finite_losses)),
+        "trailing_25_loss_mean": float(np.mean(finite_trailing_losses)),
+        "trailing_25_loss_std": float(np.std(finite_trailing_losses)),
         "signal_updates": int(last["signal_updates"]),
         "controller_activated": any(int(row["adaptive_active"]) for row in rows),
         "final_correction": float(last["correction"]),
@@ -188,7 +193,7 @@ def main():
         writer.writeheader()
         writer.writerow(flat)
 
-    report = f"""# Idea 5: 200-step diagnostic
+    report = f"""# Idea 5: {summary['attempted_iterations']}-attempt diagnostic
 
 - Attempted iterations: {summary['attempted_iterations']}
 - Successful optimizer steps: {summary['successful_optimizer_steps']}
