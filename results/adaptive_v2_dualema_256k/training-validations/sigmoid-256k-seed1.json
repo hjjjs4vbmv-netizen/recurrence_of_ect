@@ -1,0 +1,18 @@
+{
+  "amp_skipped": 8,
+  "attempted": 2000,
+  "checkpoint_sha256": {
+    "network-snapshot-000002.pkl": "d967032fd27b22f66a8572f591dc04682f03158e3a92948f5662293bc22512c3",
+    "network-snapshot-000004.pkl": "1f93875bc0f105bf42f9e4985dcc8eb7579dad66b65862dfbfbffb4bf4436b55",
+    "network-snapshot-000008.pkl": "d851c216446064458c0dcaef129f549cabb6694ea3577658ab84f5fa1217ed6e",
+    "training-state-000002.pt": "9444ad5f77f96b03fb4552243edb7e7bad506d2dc454382080f28d288966db63",
+    "training-state-000004.pt": "f7be13f5f758e763d426945f1ba0aecdbccb5018854e11c222ad4953786d7b4a",
+    "training-state-000008.pt": "599add6ca8c228243a555a6a45dff71ae4aa28bc2c30f5f7c7842c9e59a12526"
+  },
+  "final_loss": 16.52103806,
+  "frozen_head": "dfeb04db3907888d15883f6c8ac079e5207e8aa0",
+  "schedule": "sigmoid",
+  "seed": 1,
+  "status": "PASS",
+  "successful": 1992
+}

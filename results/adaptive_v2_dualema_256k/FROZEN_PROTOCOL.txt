@@ -1,0 +1,19 @@
+protocol=adaptive_v2_dualema_paired_256k_v1
+frozen_head=dfeb04db3907888d15883f6c8ac079e5207e8aa0
+branch=role-c/adaptive-v2-dualema-256k
+matrix_root=/root/autodl-tmp/ect_project/runs/adaptive-v2-dualema-256k/dfeb04db3907-20260723T021339Z
+started_at=2026-07-23T02:13:39+00:00
+batch=128
+batch_gpu=128
+precision=fp16_gradscaler
+schedules=sigmoid,adaptive_v2_dualema
+training_seeds=0,1,2
+beta_fast=0.80
+beta_slow=0.98
+max_adjust=0.05
+warmup_updates=8
+eps=1e-8
+08c9ed1b2b1c523268dc0f05a0569dd654209aea46197e3f56ec149dd714f372  /root/autodl-tmp/ect_project/datasets/cifar10-32x32.zip
+4d5dcc1f1d0d41c8934ad21626eeddbdc0460182becf9fc059a0631b1eedb4da  /root/autodl-tmp/ect_project/pretrained/edm-cifar10-32x32-uncond-vp.pkl
+NVIDIA GeForce RTX 5090, 580.105.08, 32607 MiB
+torch=2.10.0+cu128 cuda=12.8

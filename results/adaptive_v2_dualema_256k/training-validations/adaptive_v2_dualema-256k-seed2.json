@@ -1,0 +1,24 @@
+{
+  "adaptive_updates": 504,
+  "amp_skipped": 8,
+  "attempted": 2000,
+  "checkpoint_sha256": {
+    "network-snapshot-000002.pkl": "3661455b8684d4443dfbf75a74408cf214ea87f9f1674da09337f38613513096",
+    "network-snapshot-000004.pkl": "3b621d2e5f8119b014b1ee3abc7fc301f008d27a550bb7b821ff54b73a81fb53",
+    "network-snapshot-000008.pkl": "7f8381465a5a2e6b6975d7400858be07f29d2c05f39fc00cee0dddeac76c045e",
+    "training-state-000002.pt": "6864205b93c89859b5dad04680fddcb791a9aaa37d7772f0356b2f63f1ab5bbb",
+    "training-state-000004.pt": "f100aec48fffe59f7290acfabf68defd693b844be300a8f717cb42e20cc34f07",
+    "training-state-000008.pt": "aacc9647b2c8e5727f5e673c8351ba0a2e1306caae59ec0e12ea2d69de0a4467"
+  },
+  "final_fast_loss_ema": 16.1041278774,
+  "final_loss": 14.26435089,
+  "final_slow_loss_ema": 16.1830369168,
+  "first_adapted_pair_iteration": 33,
+  "first_nonzero_correction_iteration": 33,
+  "frozen_head": "dfeb04db3907888d15883f6c8ac079e5207e8aa0",
+  "schedule": "adaptive_v2_dualema",
+  "seed": 2,
+  "signal_updates": 512,
+  "status": "PASS",
+  "successful": 1992
+}

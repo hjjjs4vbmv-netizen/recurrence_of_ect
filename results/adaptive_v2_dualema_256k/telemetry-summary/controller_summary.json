@@ -1,0 +1,260 @@
+[
+  {
+    "adaptive_gap": {
+      "max": 0.0158852570711,
+      "mean": 0.01442388061325235,
+      "min": 0.0127025164309,
+      "std": 0.000476864170571118
+    },
+    "adaptive_rho": {
+      "max": 0.987297483569,
+      "mean": 0.9855761193867545,
+      "min": 0.984114742929,
+      "std": 0.0004768641705686662
+    },
+    "amp_skipped_steps": 8,
+    "attempted_iterations": 2000,
+    "correction": {
+      "max": 0.0,
+      "mean": 0.0,
+      "min": 0.0,
+      "std": 0.0
+    },
+    "correction_negative_count": 0,
+    "correction_positive_count": 0,
+    "correction_sign_flip_count": 0,
+    "correction_zero_count": 2000,
+    "final_fast_loss_ema": null,
+    "final_slow_loss_ema": null,
+    "first_adapted_pair_iteration": null,
+    "first_nonzero_correction_iteration": null,
+    "first_signal_update_iteration": null,
+    "inf_loss_count": 0,
+    "nan_loss_count": 0,
+    "nonfinite_signal_count": 0,
+    "saturation_ratio": 0.0,
+    "schedule": "sigmoid",
+    "successful_optimizer_steps": 1992,
+    "trailing_50_successful_loss": {
+      "mean": 16.238064575600003,
+      "median": 16.15242767,
+      "std": 0.9096652280551687
+    },
+    "training_seed": 0
+  },
+  {
+    "adaptive_gap": {
+      "max": 0.0170597981918,
+      "mean": 0.01435117409227165,
+      "min": 0.0105216958062,
+      "std": 0.0009444047602557566
+    },
+    "adaptive_rho": {
+      "max": 0.989478304194,
+      "mean": 0.985648825907733,
+      "min": 0.982940201808,
+      "std": 0.0009444047602522049
+    },
+    "amp_skipped_steps": 8,
+    "attempted_iterations": 2000,
+    "correction": {
+      "max": 0.00303991285244,
+      "mean": 7.27480405483197e-05,
+      "min": -0.00157616145491,
+      "std": 0.0008326496358193753
+    },
+    "correction_negative_count": 1096,
+    "correction_positive_count": 872,
+    "correction_sign_flip_count": 71,
+    "correction_zero_count": 32,
+    "final_fast_loss_ema": 16.2948922964,
+    "final_slow_loss_ema": 16.2885713269,
+    "first_adapted_pair_iteration": 33,
+    "first_nonzero_correction_iteration": 33,
+    "first_signal_update_iteration": 4,
+    "inf_loss_count": 0,
+    "nan_loss_count": 0,
+    "nonfinite_signal_count": 0,
+    "saturation_ratio": 0.008,
+    "schedule": "adaptive_v2_dualema",
+    "successful_optimizer_steps": 1992,
+    "trailing_50_successful_loss": {
+      "mean": 16.216724243199998,
+      "median": 16.2035265,
+      "std": 0.9207495317204565
+    },
+    "training_seed": 0
+  },
+  {
+    "adaptive_gap": {
+      "max": 0.0159326952764,
+      "mean": 0.01440928268109375,
+      "min": 0.0128725105769,
+      "std": 0.0004995664748642467
+    },
+    "adaptive_rho": {
+      "max": 0.987127489423,
+      "mean": 0.9855907173189005,
+      "min": 0.984067304724,
+      "std": 0.0004995664748675445
+    },
+    "amp_skipped_steps": 8,
+    "attempted_iterations": 2000,
+    "correction": {
+      "max": 0.0,
+      "mean": 0.0,
+      "min": 0.0,
+      "std": 0.0
+    },
+    "correction_negative_count": 0,
+    "correction_positive_count": 0,
+    "correction_sign_flip_count": 0,
+    "correction_zero_count": 2000,
+    "final_fast_loss_ema": null,
+    "final_slow_loss_ema": null,
+    "first_adapted_pair_iteration": null,
+    "first_nonzero_correction_iteration": null,
+    "first_signal_update_iteration": null,
+    "inf_loss_count": 0,
+    "nan_loss_count": 0,
+    "nonfinite_signal_count": 0,
+    "saturation_ratio": 0.0,
+    "schedule": "sigmoid",
+    "successful_optimizer_steps": 1992,
+    "trailing_50_successful_loss": {
+      "mean": 16.235629367599998,
+      "median": 16.23179531,
+      "std": 0.9409230362944687
+    },
+    "training_seed": 1
+  },
+  {
+    "adaptive_gap": {
+      "max": 0.0171051167236,
+      "mean": 0.0143252141156275,
+      "min": 0.011053986498,
+      "std": 0.0008686120568314185
+    },
+    "adaptive_rho": {
+      "max": 0.988946013502,
+      "mean": 0.985674785884375,
+      "min": 0.982894883276,
+      "std": 0.0008686120568259592
+    },
+    "amp_skipped_steps": 8,
+    "attempted_iterations": 2000,
+    "correction": {
+      "max": 0.00263281148375,
+      "mean": 8.406977066156532e-05,
+      "min": -0.00177323964737,
+      "std": 0.0007140774777920548
+    },
+    "correction_negative_count": 918,
+    "correction_positive_count": 1050,
+    "correction_sign_flip_count": 74,
+    "correction_zero_count": 32,
+    "final_fast_loss_ema": 16.202197937,
+    "final_slow_loss_ema": 16.2502476915,
+    "first_adapted_pair_iteration": 33,
+    "first_nonzero_correction_iteration": 33,
+    "first_signal_update_iteration": 4,
+    "inf_loss_count": 0,
+    "nan_loss_count": 0,
+    "nonfinite_signal_count": 0,
+    "saturation_ratio": 0.0,
+    "schedule": "adaptive_v2_dualema",
+    "successful_optimizer_steps": 1992,
+    "trailing_50_successful_loss": {
+      "mean": 16.226576786,
+      "median": 16.1898756,
+      "std": 0.925407412803188
+    },
+    "training_seed": 1
+  },
+  {
+    "adaptive_gap": {
+      "max": 0.0160198723623,
+      "mean": 0.0144332777097434,
+      "min": 0.0128117195319,
+      "std": 0.00046557499643966424
+    },
+    "adaptive_rho": {
+      "max": 0.987188280468,
+      "mean": 0.9855667222902516,
+      "min": 0.983980127638,
+      "std": 0.0004655749964401159
+    },
+    "amp_skipped_steps": 8,
+    "attempted_iterations": 2000,
+    "correction": {
+      "max": 0.0,
+      "mean": 0.0,
+      "min": 0.0,
+      "std": 0.0
+    },
+    "correction_negative_count": 0,
+    "correction_positive_count": 0,
+    "correction_sign_flip_count": 0,
+    "correction_zero_count": 2000,
+    "final_fast_loss_ema": null,
+    "final_slow_loss_ema": null,
+    "first_adapted_pair_iteration": null,
+    "first_nonzero_correction_iteration": null,
+    "first_signal_update_iteration": null,
+    "inf_loss_count": 0,
+    "nan_loss_count": 0,
+    "nonfinite_signal_count": 0,
+    "saturation_ratio": 0.0,
+    "schedule": "sigmoid",
+    "successful_optimizer_steps": 1992,
+    "trailing_50_successful_loss": {
+      "mean": 16.033928298600003,
+      "median": 16.084906574999998,
+      "std": 1.0320650572203827
+    },
+    "training_seed": 2
+  },
+  {
+    "adaptive_gap": {
+      "max": 0.0172869035994,
+      "mean": 0.0144020868101287,
+      "min": 0.0105091947294,
+      "std": 0.0009600372623834503
+    },
+    "adaptive_rho": {
+      "max": 0.989490805271,
+      "mean": 0.98559791318987,
+      "min": 0.982713096401,
+      "std": 0.000960037262394852
+    },
+    "amp_skipped_steps": 8,
+    "attempted_iterations": 2000,
+    "correction": {
+      "max": 0.00291606183614,
+      "mean": 3.119191804647381e-05,
+      "min": -0.00208920733578,
+      "std": 0.0008475834363388115
+    },
+    "correction_negative_count": 1125,
+    "correction_positive_count": 843,
+    "correction_sign_flip_count": 81,
+    "correction_zero_count": 32,
+    "final_fast_loss_ema": 16.1041278774,
+    "final_slow_loss_ema": 16.1830369168,
+    "first_adapted_pair_iteration": 33,
+    "first_nonzero_correction_iteration": 33,
+    "first_signal_update_iteration": 4,
+    "inf_loss_count": 0,
+    "nan_loss_count": 0,
+    "nonfinite_signal_count": 0,
+    "saturation_ratio": 0.002,
+    "schedule": "adaptive_v2_dualema",
+    "successful_optimizer_steps": 1992,
+    "trailing_50_successful_loss": {
+      "mean": 16.0084277916,
+      "median": 16.050764085,
+      "std": 1.0393740396368056
+    },
+    "training_seed": 2
+  }
+]

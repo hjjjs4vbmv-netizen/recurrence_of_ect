@@ -1,0 +1,13 @@
+{
+  "amp_skipped": 8,
+  "final_fast_loss_ema": 16.6368693743,
+  "final_slow_loss_ema": 16.0699408201,
+  "first_adapted_pair_iteration": 33,
+  "first_nonzero_correction_iteration": 33,
+  "fresh_attempted_iterations": 32,
+  "nonfinite_signal_count": 0,
+  "resume_source": "/root/autodl-tmp/ect_project/runs/adaptive-v2-dualema-smoke/dfeb04db3907-20260723T021226Z/training-state-000004.pt",
+  "signal_updates_after_fresh_phase": 8,
+  "status": "PASS",
+  "total_attempted_iterations_after_resume": 40
+}
