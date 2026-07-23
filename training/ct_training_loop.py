@@ -388,6 +388,7 @@ def training_loop(
     batch_size          = 512,      # Total batch size for one training iteration.
     batch_gpu           = None,     # Limit batch size per GPU, None = no limit.
     total_kimg          = 200000,   # Training duration, measured in thousands of training images.
+    max_steps           = None,     # Optional exact attempted-iteration cap for diagnostics.
     ema_beta            = 0.9999,   # EMA decay rate. Overwritten by ema_halflife_kimg.
     ema_halflife_kimg   = None,     # Half-life of the exponential moving average (EMA) of model weights.
     ema_rampup_ratio    = None,     # EMA ramp-up coefficient, None = no rampup.
@@ -570,7 +571,7 @@ def training_loop(
         schedule_name = loss_kwargs.get('adj', 'unknown')
     adaptive_signal_window = (
         AdaptiveSignalWindow(adaptive_update_kimg, start_nimg=cur_nimg)
-        if schedule_name == 'adaptive_v1' else None
+        if schedule_name in ('adaptive_v1', 'adaptive_variance_v1') else None
     )
     if adaptive_signal_window is not None and resume_state_dump:
         if resumed_adaptive_signal_window_state is None:
@@ -709,6 +710,14 @@ def training_loop(
         dist.print0('Exiting...')
         return
 
+    if max_steps is not None and attempted_iteration >= max_steps:
+        dist.print0(f'Already reached diagnostic step limit at {attempted_iteration} steps; exiting.')
+        if train_summary_csv is not None:
+            train_summary_csv.close()
+        dist.print0()
+        dist.print0('Exiting...')
+        return
+
     while True:
 
         # Accumulate gradients.
@@ -812,7 +821,10 @@ def training_loop(
         # This cannot be derived reliably from image count: the first iteration
         # always performs maintenance, and completion forces it regardless of
         # --tick. A checkpoint saved below persists this same cur_tick value.
-        done = (cur_nimg >= total_kimg * 1000)
+        done = (
+            cur_nimg >= total_kimg * 1000
+            or (max_steps is not None and attempted_iteration >= max_steps)
+        )
         maintenance_due = (
             done
             or cur_tick == 0
