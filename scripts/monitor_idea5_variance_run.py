@@ -143,6 +143,7 @@ def main():
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--interval", type=float, default=5.0)
+    parser.add_argument("--stop-after", type=int)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
