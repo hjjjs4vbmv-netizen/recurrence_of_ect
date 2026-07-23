@@ -14,7 +14,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCHEDULES = ("sigmoid", "adaptive_v1")
+FIXED_SCHEDULE = "sigmoid"
+DEFAULT_TREATMENT_SCHEDULE = "adaptive_v1"
+SUPPORTED_TREATMENT_SCHEDULES = ("adaptive_v1", "pid_deadband")
 TRAINING_SEEDS = (0, 1, 2)
 NFES = (1, 2)
 SAMPLE_SEEDS = "0-4999"
@@ -43,7 +45,13 @@ def git_head() -> str:
         return "unknown"
 
 
-def load_cells(path: Path, allow_missing: bool) -> list[dict]:
+def load_cells(
+    path: Path,
+    allow_missing: bool,
+    treatment_schedule: str = DEFAULT_TREATMENT_SCHEDULE,
+) -> list[dict]:
+    if treatment_schedule not in SUPPORTED_TREATMENT_SCHEDULES:
+        fail(f"unsupported treatment schedule: {treatment_schedule}")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -70,13 +78,14 @@ def load_cells(path: Path, allow_missing: bool) -> list[dict]:
             "expected_sha256": cell.get("checkpoint_sha256"),
         }
 
-    expected = {(schedule, seed) for schedule in SCHEDULES for seed in TRAINING_SEEDS}
+    schedules = (FIXED_SCHEDULE, treatment_schedule)
+    expected = {(schedule, seed) for schedule in schedules for seed in TRAINING_SEEDS}
     if set(keyed) != expected:
         missing = sorted(expected - set(keyed))
         extra = sorted(set(keyed) - expected)
         fail(f"manifest is not the frozen 2x3 matrix; missing={missing}, extra={extra}")
 
-    ordered = [keyed[(schedule, seed)] for seed in TRAINING_SEEDS for schedule in SCHEDULES]
+    ordered = [keyed[(schedule, seed)] for seed in TRAINING_SEEDS for schedule in schedules]
     for cell in ordered:
         checkpoint = cell["checkpoint"]
         if not checkpoint.is_file():
@@ -177,6 +186,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--phase", choices=("quantitative", "visual", "all"), default="all")
     parser.add_argument("--metrics", choices=("primary", "fid-only"), default="primary")
+    parser.add_argument(
+        "--treatment-schedule",
+        choices=SUPPORTED_TREATMENT_SCHEDULES,
+        default=DEFAULT_TREATMENT_SCHEDULE,
+    )
     parser.add_argument("--base-port", type=int, default=29600)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-missing-checkpoints", action="store_true", help="Dry-run only")
@@ -191,7 +205,11 @@ def main(argv: list[str] | None = None) -> None:
     if not args.dry_run:
         require_empty(outdir)
 
-    cells = load_cells(args.manifest, allow_missing=args.allow_missing_checkpoints)
+    cells = load_cells(
+        args.manifest,
+        allow_missing=args.allow_missing_checkpoints,
+        treatment_schedule=args.treatment_schedule,
+    )
     jobs = []
     if args.phase in {"quantitative", "all"}:
         jobs.extend(quantitative_commands(cells, data, outdir, args.base_port, args.metrics))
@@ -206,6 +224,8 @@ def main(argv: list[str] | None = None) -> None:
         "dataset_sha256": sha256_file(data) if data.is_file() else "missing",
         "precision": "fp32",
         "training_seeds": list(TRAINING_SEEDS),
+        "fixed_schedule": FIXED_SCHEDULE,
+        "treatment_schedule": args.treatment_schedule,
         "nfe_modes": {"1": [], "2": [0.821]},
         "quantitative_sample_seeds": SAMPLE_SEEDS,
         "visual_sample_seeds": VISUAL_SEEDS,

@@ -196,6 +196,31 @@ For `pid_deadband`, packaging requires populated controller telemetry, validates
 the persisted controller state against the final CSV row, and rejects any
 correction outside the frozen `pid_max_control` bound.
 
+## Idea 7 quality evaluation
+
+After all six 128 kimg runs pass the collector, evaluate their final EMA
+snapshots with the same FP32, NFE=1/2, seeds 0-4999 KID-5k/FID-5k proxy
+pipeline used by the final evaluation tooling. Select the PID treatment
+explicitly so archived Adaptive v1 manifests retain their original meaning:
+
+```bash
+python scripts/run_final_evaluation_matrix.py \
+  --manifest /path/to/pid_checkpoints.json \
+  --data /mnt/ect_project/datasets/cifar10-32x32.zip \
+  --outdir /path/to/pid_eval \
+  --phase quantitative \
+  --metrics primary \
+  --treatment-schedule pid_deadband
+
+python scripts/collect_final_quality_results.py \
+  --eval-root /path/to/pid_eval \
+  --outdir /path/to/pid_summary \
+  --treatment-schedule pid_deadband
+```
+
+This remains a 5k-sample proxy evaluation, not a standard FID-50k benchmark.
+Paired deltas are `pid_deadband - sigmoid`; negative values favor Idea 7.
+
 Automatically records train-time HEAD from `run_meta.env`, packaging-time HEAD,
 dirty status, exact command, asset SHA256 digests, and runtime metadata.
 Packaging fails closed unless train-time and packaging HEADs match, and unless

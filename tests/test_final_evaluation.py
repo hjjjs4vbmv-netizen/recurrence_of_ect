@@ -15,10 +15,10 @@ from scripts import score_blind_ab
 
 
 class FinalEvaluationTest(unittest.TestCase):
-    def make_manifest(self, root: Path):
+    def make_manifest(self, root: Path, treatment_schedule: str = "adaptive_v1"):
         cells = []
         for seed in range(3):
-            for schedule in ("sigmoid", "adaptive_v1"):
+            for schedule in ("sigmoid", treatment_schedule):
                 checkpoint = root / f"{schedule}_seed{seed}.pkl"
                 checkpoint.write_bytes(f"{schedule}-{seed}".encode())
                 result_dir = root / f"{schedule}_seed{seed}_result"
@@ -57,16 +57,16 @@ class FinalEvaluationTest(unittest.TestCase):
                 self.assertIn("--metrics=kid5k_full,fid5k_full", command)
                 self.assertIn("--fp16=False", command)
 
-    def make_metric_matrix(self, root: Path):
+    def make_metric_matrix(self, root: Path, treatment_schedule: str = "adaptive_v1"):
         for seed in range(3):
-            for schedule in ("sigmoid", "adaptive_v1"):
+            for schedule in ("sigmoid", treatment_schedule):
                 for nfe in (1, 2):
                     cell = root / "quantitative" / schedule / f"seed{seed}" / f"nfe{nfe}"
                     cell.mkdir(parents=True)
                     fixed_base = 10 + seed + nfe
                     values = {
-                        "kid5k_full": fixed_base - (0.25 if schedule == "adaptive_v1" else 0),
-                        "fid5k_full": fixed_base + 5 - (0.5 if schedule == "adaptive_v1" else 0),
+                        "kid5k_full": fixed_base - (0.25 if schedule == treatment_schedule else 0),
+                        "fid5k_full": fixed_base + 5 - (0.5 if schedule == treatment_schedule else 0),
                     }
                     for metric, value in values.items():
                         payload = {"metric": metric, "results": {metric: value}}
@@ -83,6 +83,48 @@ class FinalEvaluationTest(unittest.TestCase):
                 kid = summary["summary_by_nfe"][str(nfe)]["kid5k_full"]
                 self.assertAlmostEqual(kid["mean_delta"], -0.25)
                 self.assertEqual(kid["adaptive_fixed_tie_seed_counts"], [3, 0, 0])
+
+    def test_pid_runner_and_quantitative_collector_preserve_pairing(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest, _ = self.make_manifest(root, treatment_schedule="pid_deadband")
+            cells = run_final_evaluation_matrix.load_cells(
+                manifest,
+                allow_missing=False,
+                treatment_schedule="pid_deadband",
+            )
+            self.assertEqual(
+                {(cell["schedule"], cell["training_seed"]) for cell in cells},
+                {
+                    (schedule, seed)
+                    for schedule in ("sigmoid", "pid_deadband")
+                    for seed in range(3)
+                },
+            )
+
+            eval_root = root / "eval"
+            self.make_metric_matrix(eval_root, treatment_schedule="pid_deadband")
+            outdir = root / "summary"
+            collect_final_quality_results.main([
+                "--eval-root",
+                str(eval_root),
+                "--outdir",
+                str(outdir),
+                "--treatment-schedule",
+                "pid_deadband",
+            ])
+            summary = json.loads(
+                (outdir / "quantitative_summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(summary["treatment_schedule"], "pid_deadband")
+            self.assertEqual(
+                summary["delta_definition"],
+                "pid_deadband - sigmoid; negative favors pid_deadband",
+            )
+            for nfe in (1, 2):
+                kid = summary["summary_by_nfe"][str(nfe)]["kid5k_full"]
+                self.assertAlmostEqual(kid["mean_delta"], -0.25)
+                self.assertEqual(kid["pid_fixed_tie_seed_counts"], [3, 0, 0])
 
     def make_visual_samples(self, manifest: Path, sample_root: Path):
         cells = build_blind_ab.load_cells(manifest)

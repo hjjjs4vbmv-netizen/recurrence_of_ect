@@ -11,7 +11,9 @@ import statistics
 from pathlib import Path
 
 
-SCHEDULES = ("sigmoid", "adaptive_v1")
+FIXED_SCHEDULE = "sigmoid"
+DEFAULT_TREATMENT_SCHEDULE = "adaptive_v1"
+SUPPORTED_TREATMENT_SCHEDULES = ("adaptive_v1", "pid_deadband")
 TRAINING_SEEDS = (0, 1, 2)
 NFES = (1, 2)
 METRICS = ("kid5k_full", "fid5k_full")
@@ -39,11 +41,18 @@ def read_single_metric(path: Path, metric: str) -> float | None:
     return value
 
 
-def load_rows(eval_root: Path, allow_fid_only: bool) -> tuple[list[dict], str]:
+def load_rows(
+    eval_root: Path,
+    allow_fid_only: bool,
+    treatment_schedule: str = DEFAULT_TREATMENT_SCHEDULE,
+) -> tuple[list[dict], str]:
+    if treatment_schedule not in SUPPORTED_TREATMENT_SCHEDULES:
+        fail(f"unsupported treatment schedule: {treatment_schedule}")
+    schedules = (FIXED_SCHEDULE, treatment_schedule)
     rows = []
     kid_presence = []
     for seed in TRAINING_SEEDS:
-        for schedule in SCHEDULES:
+        for schedule in schedules:
             for nfe in NFES:
                 cell = eval_root / "quantitative" / schedule / f"seed{seed}" / f"nfe{nfe}"
                 values = {
@@ -66,44 +75,64 @@ def load_rows(eval_root: Path, allow_fid_only: bool) -> tuple[list[dict], str]:
     return rows, "kid5k_full" if all(kid_presence) else "fid5k_full"
 
 
-def paired_rows(rows: list[dict], available_metrics: list[str]) -> list[dict]:
+def paired_rows(
+    rows: list[dict],
+    available_metrics: list[str],
+    treatment_schedule: str = DEFAULT_TREATMENT_SCHEDULE,
+) -> list[dict]:
     index = {(row["schedule"], row["training_seed"], row["nfe"]): row for row in rows}
+    treatment_prefix = "adaptive" if treatment_schedule == "adaptive_v1" else "pid"
     paired = []
     for seed in TRAINING_SEEDS:
         for nfe in NFES:
-            fixed = index[("sigmoid", seed, nfe)]
-            adaptive = index[("adaptive_v1", seed, nfe)]
+            fixed = index[(FIXED_SCHEDULE, seed, nfe)]
+            treatment = index[(treatment_schedule, seed, nfe)]
             row = {"training_seed": seed, "nfe": nfe}
             for metric in available_metrics:
                 row[f"fixed_{metric}"] = fixed[metric]
-                row[f"adaptive_{metric}"] = adaptive[metric]
-                row[f"delta_{metric}"] = adaptive[metric] - fixed[metric]
+                row[f"{treatment_prefix}_{metric}"] = treatment[metric]
+                row[f"delta_{metric}"] = treatment[metric] - fixed[metric]
             paired.append(row)
     return paired
 
 
-def summarize(paired: list[dict], available_metrics: list[str]) -> dict:
+def summarize(
+    paired: list[dict],
+    available_metrics: list[str],
+    treatment_schedule: str = DEFAULT_TREATMENT_SCHEDULE,
+) -> dict:
+    treatment_prefix = "adaptive" if treatment_schedule == "adaptive_v1" else "pid"
     by_nfe = {}
     for nfe in NFES:
         by_nfe[str(nfe)] = {}
         selected = [row for row in paired if row["nfe"] == nfe]
         for metric in available_metrics:
             deltas = [row[f"delta_{metric}"] for row in selected]
-            adaptive_wins = sum(value < 0 for value in deltas)
+            treatment_wins = sum(value < 0 for value in deltas)
             fixed_wins = sum(value > 0 for value in deltas)
             ties = sum(value == 0 for value in deltas)
             by_nfe[str(nfe)][metric] = {
-                "paired_deltas_adaptive_minus_fixed": deltas,
+                "paired_deltas_treatment_minus_fixed": deltas,
                 "mean_delta": statistics.mean(deltas),
                 "sample_sd_delta": statistics.stdev(deltas),
-                "adaptive_fixed_tie_seed_counts": [adaptive_wins, fixed_wins, ties],
+                "treatment_fixed_tie_seed_counts": [treatment_wins, fixed_wins, ties],
+                f"{treatment_prefix}_fixed_tie_seed_counts": [
+                    treatment_wins,
+                    fixed_wins,
+                    ties,
+                ],
             }
     return {
         "schema_version": 1,
         "evaluation_label": "5k-sample proxy evaluation; not a standard FID-50k benchmark",
         "primary_metric": "kid5k_full" if "kid5k_full" in available_metrics else "fid5k_full",
         "auxiliary_metric": "fid5k_full" if "kid5k_full" in available_metrics else None,
-        "delta_definition": "adaptive_v1 - sigmoid; negative favors adaptive_v1",
+        "fixed_schedule": FIXED_SCHEDULE,
+        "treatment_schedule": treatment_schedule,
+        "delta_definition": (
+            f"{treatment_schedule} - {FIXED_SCHEDULE}; "
+            f"negative favors {treatment_schedule}"
+        ),
         "training_seeds": list(TRAINING_SEEDS),
         "nfe": {"1": {"mid_t": []}, "2": {"mid_t": [0.821]}},
         "summary_by_nfe": by_nfe,
@@ -122,13 +151,23 @@ def format_value(value: float | None) -> str:
     return "—" if value is None else f"{value:.6f}"
 
 
-def write_markdown(path: Path, rows: list[dict], paired: list[dict], summary: dict, available_metrics: list[str]) -> None:
+def write_markdown(
+    path: Path,
+    rows: list[dict],
+    paired: list[dict],
+    summary: dict,
+    available_metrics: list[str],
+    treatment_schedule: str = DEFAULT_TREATMENT_SCHEDULE,
+) -> None:
+    treatment_prefix = "adaptive" if treatment_schedule == "adaptive_v1" else "pid"
     lines = [
         "# Final quantitative quality summary",
         "",
         "> 5k-sample proxy evaluation; not a standard FID-50k benchmark.",
         "",
-        "Lower is better for both metrics. Paired delta is `Adaptive v1 - fixed sigmoid`; negative favors Adaptive v1.",
+        f"Lower is better for both metrics. Paired delta is "
+        f"`{treatment_schedule} - {FIXED_SCHEDULE}`; negative favors "
+        f"{treatment_schedule}.",
         "",
         "## Per-cell results",
         "",
@@ -159,7 +198,8 @@ def write_markdown(path: Path, rows: list[dict], paired: list[dict], summary: di
             item = summary["summary_by_nfe"][str(nfe)][metric]
             pieces.append(
                 f"{metric}: mean Δ={item['mean_delta']:.6f}, sample SD={item['sample_sd_delta']:.6f}, "
-                f"adaptive/fixed/tie seeds={item['adaptive_fixed_tie_seed_counts']}"
+                f"{treatment_prefix}/fixed/tie seeds="
+                f"{item['treatment_fixed_tie_seed_counts']}"
             )
         lines.append(f"- NFE={nfe}: " + "; ".join(pieces))
     lines.extend([
@@ -175,12 +215,29 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--eval-root", type=Path, required=True)
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--allow-fid-only", action="store_true")
+    parser.add_argument(
+        "--treatment-schedule",
+        choices=SUPPORTED_TREATMENT_SCHEDULES,
+        default=DEFAULT_TREATMENT_SCHEDULE,
+    )
     args = parser.parse_args(argv)
 
-    rows, primary = load_rows(args.eval_root.resolve(), args.allow_fid_only)
+    rows, primary = load_rows(
+        args.eval_root.resolve(),
+        args.allow_fid_only,
+        treatment_schedule=args.treatment_schedule,
+    )
     available_metrics = ["fid5k_full"] if primary == "fid5k_full" else list(METRICS)
-    paired = paired_rows(rows, available_metrics)
-    summary = summarize(paired, available_metrics)
+    paired = paired_rows(
+        rows,
+        available_metrics,
+        treatment_schedule=args.treatment_schedule,
+    )
+    summary = summarize(
+        paired,
+        available_metrics,
+        treatment_schedule=args.treatment_schedule,
+    )
 
     outdir = args.outdir.resolve()
     outdir.mkdir(parents=True, exist_ok=True)
@@ -190,7 +247,12 @@ def main(argv: list[str] | None = None) -> None:
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"
     )
     write_markdown(
-        outdir / "quantitative_summary.md", rows, paired, summary, available_metrics
+        outdir / "quantitative_summary.md",
+        rows,
+        paired,
+        summary,
+        available_metrics,
+        treatment_schedule=args.treatment_schedule,
     )
     print(f"Validated 12 cells; primary metric: {primary}; output: {outdir}")
 
