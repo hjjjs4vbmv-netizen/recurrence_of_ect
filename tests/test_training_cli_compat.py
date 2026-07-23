@@ -27,6 +27,11 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
         self.assertEqual(params['adaptive_warmup_updates'], 2)
         self.assertEqual(params['adaptive_max_adjust'], 0.05)
         self.assertEqual(params['adaptive_min_gap'], 1e-3)
+        self.assertEqual(params['adaptive_variance_ema_beta'], 0.9)
+        self.assertEqual(params['adaptive_variance_strength'], 1.0)
+        self.assertEqual(params['adaptive_min_gap_scale'], 0.5)
+        self.assertEqual(params['adaptive_num_bins'], 4)
+        self.assertIsNone(params['max_steps'])
 
     def test_legacy_mapping_option_is_preserved(self):
         self.assertEqual(parse_train_args('--mapping=const')['mapping'], 'const')
@@ -39,7 +44,7 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
         self.assertEqual(parse_train_args('-q', '1.01')['q'], 1.01)
 
     def test_schedule_and_mapping_are_equivalent_names(self):
-        for schedule in ['const', 'sigmoid', 'adaptive_v1']:
+        for schedule in ['const', 'sigmoid', 'adaptive_v1', 'adaptive_variance_v1']:
             with self.subTest(schedule=schedule):
                 legacy = parse_train_args('--mapping', schedule)
                 current = parse_train_args('--schedule', schedule)
@@ -73,6 +78,32 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
         self.assertEqual(loss_kwargs.adaptive_warmup_updates, 3)
         self.assertEqual(loss_kwargs.adaptive_max_adjust, 0.04)
         self.assertEqual(loss_kwargs.adaptive_min_gap, 0.002)
+
+    def test_variance_schedule_cli_reaches_loss_config(self):
+        params = parse_train_args(
+            '--schedule', 'adaptive_variance_v1',
+            '--adaptive-variance-ema-beta', '0.8',
+            '--adaptive-variance-strength', '0.75',
+            '--adaptive-min-gap-scale', '0.6',
+            '--adaptive-num-bins', '4',
+            '--adaptive-warmup-updates', '3',
+            '--max-steps', '200',
+        )
+        loss_kwargs = ct_train.make_loss_kwargs(dnnlib.EasyDict(params))
+        self.assertEqual(loss_kwargs.adj, 'adaptive_variance_v1')
+        self.assertEqual(loss_kwargs.adaptive_variance_ema_beta, 0.8)
+        self.assertEqual(loss_kwargs.adaptive_variance_strength, 0.75)
+        self.assertEqual(loss_kwargs.adaptive_min_gap_scale, 0.6)
+        self.assertEqual(loss_kwargs.adaptive_num_bins, 4)
+        self.assertEqual(params['max_steps'], 200)
+
+    def test_hyphenated_variance_name_is_canonicalized(self):
+        self.assertEqual(
+            parse_train_args(
+                '--schedule', 'adaptive-variance-v1'
+            )['mapping'],
+            'adaptive_variance_v1',
+        )
 
     def test_explicit_sigmoid_disables_adaptive_v1(self):
         params = parse_train_args('--schedule', 'sigmoid')
