@@ -1,8 +1,8 @@
 # Paired Training Protocol (Role B)
 
-Canonical protocol for fair fixed (`sigmoid`) vs adaptive (`adaptive_v1`) ECT
-training comparisons. This supersedes ad-hoc `baseline_protocol.md` notes for
-paired-run engineering.
+Canonical protocol for fair fixed (`sigmoid`) vs controlled
+(`adaptive_v1` or `pid_deadband`) ECT training comparisons. This supersedes
+ad-hoc `baseline_protocol.md` notes for paired-run engineering.
 
 ## Scope
 
@@ -27,7 +27,7 @@ Except for `--schedule` / `--mapping`, both arms use:
 | Teacher | EDM CIFAR-10 uncond VP transfer |
 | Cond | False |
 | Arch / precond | ddpmpp / ect |
-| Optim / lr | RAdam / 1e-4 |
+| Optim / base lr | RAdam / 1e-4 |
 | Batch / batch-gpu | 128 / 16 |
 | Dropout / augment | 0.2 / 0 |
 | q / k / b / c | 256 / 8 / 1 / 0 |
@@ -36,6 +36,20 @@ Except for `--schedule` / `--mapping`, both arms use:
 | seed | Explicit per run; 0, 1, or 2 for the final paired matrix |
 | Precision | FP16 + GradScaler |
 | Metrics | none |
+
+For `pid_deadband`, the controller and learning-rate treatment is frozen to:
+
+| Knob | Value |
+| --- | --- |
+| PID update interval | 1.024 kimg for the 128 kimg formal baseline |
+| Kp / Ki / Kd | 0.1 / 0.01 / 0.05 |
+| Deadband / integral limit / max control | 0.02 / 5 / 0.1 |
+| LR boost / max boost / warmup | 1.25 / 1.5 / 256 kimg |
+
+The 1.024 kimg interval yields exactly 125 controller updates in a 128 kimg
+formal run. The base optimizer LR remains 1e-4 in both arms; the PID-aware
+effective-LR trajectory is part of the `pid_deadband` treatment and is recorded
+in training telemetry.
 
 ## Modes
 
@@ -58,12 +72,24 @@ bash scripts/run_schedule_experiment.sh \
   --mode stability \
   --schedule adaptive_v1 \
   --seed 1
+
+bash scripts/run_schedule_experiment.sh \
+  --mode baseline \
+  --schedule pid_deadband \
+  --seed 1
 ```
 
-Within each paired training seed, except for `--schedule` (and Role C
-adaptive-internal knobs once on `main`), every other frozen knob is identical.
+Within each paired training seed, except for `--schedule` and the selected
+controller's frozen internal knobs, every other frozen knob is identical.
 The runner accepts only seeds 0, 1, and 2 for this final matrix; its default
 remains seed 0 for compatibility with the archived run.
+
+The formal Idea 7 comparison is the six-run matrix:
+
+```text
+sigmoid      × seeds 0, 1, 2 × baseline (0.128 Mimg)
+pid_deadband × seeds 0, 1, 2 × baseline (0.128 Mimg)
+```
 
 Default unique outdirs:
 
@@ -165,6 +191,10 @@ with 32 attempted iterations (4.096 kimg), eight final signal updates, full
 telemetry coverage, and matching final next-loop tick (`2`) between CSV and
 training state. This is controller-activation evidence only, not a paired
 quality, stability, or baseline result.
+
+For `pid_deadband`, packaging requires populated controller telemetry, validates
+the persisted controller state against the final CSV row, and rejects any
+correction outside the frozen `pid_max_control` bound.
 
 Automatically records train-time HEAD from `run_meta.env`, packaging-time HEAD,
 dirty status, exact command, asset SHA256 digests, and runtime metadata.

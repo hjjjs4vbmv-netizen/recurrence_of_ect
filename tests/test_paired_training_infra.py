@@ -177,7 +177,7 @@ def write_collector_training_state(
             "schedule": {},
         },
     }
-    if schedule == "adaptive_v1":
+    if schedule in {"adaptive_v1", "pid_deadband"}:
         state["loss_fn_state"]["schedule"] = {
             "loss_ema": 0.8,
             "loss_reference": 1.0,
@@ -292,6 +292,36 @@ class RunnerInfraTests(unittest.TestCase):
         self.assertRegex(
             completed.stdout,
             r"OUTDIR=.*/adaptive-v1-dry-run-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
+        )
+
+    def test_dry_run_pid_freezes_controller_and_lr_parameters(self):
+        env = os.environ.copy()
+        env["ECT_DATA_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.zip"
+        env["ECT_TRANSFER_PATH"] = "/tmp/does-not-need-to-exist-for-dry-run.pkl"
+        env["ECT_RUNS_ROOT"] = "/tmp/paired-runs"
+        completed = subprocess.run(
+            ["bash", str(RUNNER), "--schedule", "pid_deadband", "--mode", "dry-run"],
+            cwd=REPO_ROOT,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("schedule_slug=pid-deadband", completed.stdout)
+        self.assertIn("--mapping=pid_deadband", completed.stdout)
+        self.assertIn("--pid-update-kimg=1.024", completed.stdout)
+        self.assertIn("--pid-kp=0.1", completed.stdout)
+        self.assertIn("--pid-ki=0.01", completed.stdout)
+        self.assertIn("--pid-kd=0.05", completed.stdout)
+        self.assertIn("--pid-deadband=0.02", completed.stdout)
+        self.assertIn("--pid-integral-limit=5", completed.stdout)
+        self.assertIn("--pid-max-control=0.1", completed.stdout)
+        self.assertIn("--pid-lr-boost=1.25", completed.stdout)
+        self.assertIn("--pid-lr-max-boost=1.5", completed.stdout)
+        self.assertIn("--pid-lr-warmup-kimg=256", completed.stdout)
+        self.assertRegex(
+            completed.stdout,
+            r"OUTDIR=.*/pid-deadband-dry-run-[0-9a-f]{8}-[0-9]{8}T[0-9]{6}Z",
         )
 
     def test_dry_run_accepts_final_matrix_seed_one(self):
@@ -715,6 +745,63 @@ class CollectorInfraTests(unittest.TestCase):
                 load_training_state=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_pid_telemetry_and_training_state_are_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="pid_deadband",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            write_collector_training_state(run_dir, schedule="pid_deadband")
+            completed = self._run_collector(
+                run_dir,
+                outdir,
+                data,
+                transfer,
+                schedule="pid_deadband",
+                load_training_state=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            metadata = json.loads((outdir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["schedule"], "pid_deadband")
+            self.assertTrue(metadata["schedule_telemetry_available"])
+            self.assertEqual(metadata["final_signal_updates"], 3)
+
+    def test_pid_correction_must_respect_frozen_control_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run"
+            outdir = tmp_path / "out"
+            data, transfer = self._assets(tmp_path)
+            write_minimal_run(
+                run_dir,
+                schedule="pid_deadband",
+                data_path=data,
+                transfer_path=transfer,
+                include_telemetry=True,
+            )
+            summary_path = run_dir / "train_summary.csv"
+            with summary_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = reader.fieldnames
+                row = next(reader)
+            row["correction"] = "0.100001"
+            with summary_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerow(row)
+            completed = self._run_collector(
+                run_dir, outdir, data, transfer, schedule="pid_deadband"
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("pid correction exceeds pid_max_control", completed.stderr)
 
     def test_baseline_training_state_uses_recorded_tick_not_tick_formula(self):
         # With batch=128 and default --tick=50 kimg, real maintenance runs at

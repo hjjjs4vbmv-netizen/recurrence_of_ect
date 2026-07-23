@@ -55,6 +55,7 @@ MODE_DURATION_MIMG = {
 
 ACTIVATION_MIN_SIGNAL_UPDATES = 3
 ACTIVATION_MIN_FOLLOWING_ITERATIONS = 4
+CONTROLLED_SCHEDULES = frozenset(("adaptive_v1", "pid_deadband"))
 
 
 def expected_final_nimg(duration_mimg: float, global_batch: int) -> int:
@@ -432,11 +433,11 @@ def validate_training_state_against_csv(
             f"csv_last_next_loop={expected_cur_tick} ({training_state})"
         )
 
-    if schedule != "adaptive_v1":
+    if schedule not in CONTROLLED_SCHEDULES:
         return
     loss_fn_state = state.get("loss_fn_state")
     if not isinstance(loss_fn_state, dict):
-        fail(f"adaptive training-state missing loss_fn_state: {training_state}")
+        fail(f"controlled-schedule training-state missing loss_fn_state: {training_state}")
     if loss_fn_state.get("schedule_name") != schedule:
         fail(
             f"training-state schedule mismatch: state={loss_fn_state.get('schedule_name')!r} "
@@ -444,7 +445,10 @@ def validate_training_state_against_csv(
         )
     controller_state = loss_fn_state.get("schedule")
     if not isinstance(controller_state, dict):
-        fail(f"adaptive training-state missing loss_fn_state.schedule: {training_state}")
+        fail(
+            "controlled-schedule training-state missing "
+            f"loss_fn_state.schedule: {training_state}"
+        )
 
     state_updates = _state_integer(controller_state, "signal_updates", training_state)
     csv_updates = last_packaged_row["signal_updates"]
@@ -508,7 +512,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--data", type=Path, required=True, help="Dataset zip for SHA256 metadata")
     parser.add_argument("--transfer", type=Path, required=True, help="EDM transfer pickle for SHA256 metadata")
     parser.add_argument("--mode", required=True, choices=sorted(MODE_DURATION_MIMG))
-    parser.add_argument("--schedule", required=True, choices=("sigmoid", "adaptive_v1", "const"))
+    parser.add_argument(
+        "--schedule",
+        required=True,
+        choices=("sigmoid", "adaptive_v1", "pid_deadband", "const"),
+    )
     parser.add_argument("--duration-mimg", type=float)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--global-batch", type=int, default=128)
@@ -612,8 +620,10 @@ def main(argv: list[str] | None = None) -> None:
     if any(telemetry_columns) and not all(telemetry_columns):
         fail("train_summary.csv has a partial schedule telemetry schema")
     telemetry_columns_available = all(telemetry_columns)
-    if args.schedule == "adaptive_v1" and not telemetry_columns_available:
-        fail("adaptive_v1 train_summary.csv missing stable schedule telemetry columns")
+    if args.schedule in CONTROLLED_SCHEDULES and not telemetry_columns_available:
+        fail(
+            f"{args.schedule} train_summary.csv missing stable schedule telemetry columns"
+        )
 
     exact_command = extract_exact_command(command_meta, args.log, args.exact_command_file)
     cmd_schedule = extract_mapping_from_command(exact_command)
@@ -626,6 +636,13 @@ def main(argv: list[str] | None = None) -> None:
         fail("exact_command missing --duration=")
     if not math.isclose(cmd_duration, args.duration_mimg, rel_tol=0.0, abs_tol=1e-12):
         fail(f"exact_command duration={cmd_duration} != expected {args.duration_mimg}")
+    pid_max_control = None
+    if args.schedule == "pid_deadband":
+        pid_max_control = parse_finite_float(
+            command_meta.get("pid_max_control", "0.1"), "pid_max_control"
+        )
+        if pid_max_control < 0:
+            fail(f"pid_max_control must be >= 0, got {pid_max_control}")
 
     losses: list[float] = []
     grad_scales: list[float] = []
@@ -713,13 +730,21 @@ def main(argv: list[str] | None = None) -> None:
                 telemetry["signal_updates"] == 0 or telemetry["loss_reference"] is None
             ):
                 fail("adaptive_active=true requires positive signal_updates and loss_reference")
-            if args.schedule != "adaptive_v1" and (
+            if (
+                args.schedule == "pid_deadband"
+                and abs(telemetry["correction"]) > pid_max_control + 1e-12
+            ):
+                fail(
+                    f"pid correction exceeds pid_max_control={pid_max_control}: "
+                    f"{telemetry['correction']}"
+                )
+            if args.schedule not in CONTROLLED_SCHEDULES and (
                 telemetry["signal_updates"] != 0
                 or telemetry["adaptive_active"]
                 or telemetry["correction"] != 0
                 or telemetry["loss_ema"] is not None
             ):
-                fail(f"fixed schedule {args.schedule!r} contains adaptive controller telemetry")
+                fail(f"fixed schedule {args.schedule!r} contains controller telemetry")
 
         packaged.append(
             {
@@ -738,8 +763,10 @@ def main(argv: list[str] | None = None) -> None:
             }
         )
 
-    if args.schedule == "adaptive_v1" and telemetry_rows == 0:
-        fail("adaptive_v1 train_summary.csv contains no populated schedule telemetry rows")
+    if args.schedule in CONTROLLED_SCHEDULES and telemetry_rows == 0:
+        fail(
+            f"{args.schedule} train_summary.csv contains no populated schedule telemetry rows"
+        )
 
     attempted = len(packaged)
     successful = attempted - skipped

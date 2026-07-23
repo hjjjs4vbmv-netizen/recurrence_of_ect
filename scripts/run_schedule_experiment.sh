@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# Paired experiment runner (Role B) — owner of fixed/adaptive comparison infra.
-# Same frozen hyperparameters for both schedules; only --schedule (and Role C
-# adaptive-internal knobs once available) may differ.
+# Paired experiment runner (Role B) — owner of fixed/controller comparison infra.
+# Same frozen hyperparameters for all schedules; only --schedule and the selected
+# controller's internal knobs may differ.
 #
 # Duration (Mimg) → total_kimg = int(duration * 1000); discrete batch completion
 #   activation 0.004 → 4 kimg target → 32 attempted iterations @ batch 128 (4096 images)
@@ -28,7 +28,7 @@ usage() {
     cat <<'EOF'
 Usage:
   bash scripts/run_schedule_experiment.sh \
-    --schedule {sigmoid|adaptive_v1} \
+    --schedule {sigmoid|adaptive_v1|pid_deadband} \
     --mode {dry-run|activation|stability|baseline} \
     [--seed {0|1|2}] \
     [--outdir DIR] \
@@ -90,6 +90,7 @@ sha256_file() {
 schedule_slug() {
     case "$1" in
         adaptive_v1) printf 'adaptive-v1' ;;
+        pid_deadband) printf 'pid-deadband' ;;
         *) printf '%s' "$1" ;;
     esac
 }
@@ -189,9 +190,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$SCHEDULE" in
-    sigmoid|adaptive_v1) ;;
+    sigmoid|adaptive_v1|pid_deadband) ;;
     *)
-        echo "Usage: $0 --schedule {sigmoid|adaptive_v1} --mode {...}" >&2
+        echo "Usage: $0 --schedule {sigmoid|adaptive_v1|pid_deadband} --mode {...}" >&2
         exit 2
         ;;
 esac
@@ -223,7 +224,7 @@ case "$SEED" in
         ;;
 esac
 
-# Frozen paired knobs — identical for sigmoid and adaptive_v1.
+# Frozen paired knobs — identical for all arms.
 DATA="${ECT_DATA_PATH:-/mnt/ect_project/datasets/cifar10-32x32.zip}"
 TRANSFER="${ECT_TRANSFER_PATH:-/mnt/ect_project/pretrained/edm-cifar10-32x32-uncond-vp.pkl}"
 RUNS_ROOT="${ECT_RUNS_ROOT:-/mnt/ect_project/runs/paired-training-v1}"
@@ -247,6 +248,19 @@ FP16=True
 ENABLE_AMP=True
 METRICS=none
 
+# Frozen pid_deadband treatment knobs. The formal 128 kimg baseline uses
+# 1.024 kimg windows, yielding exactly 125 controller updates.
+PID_UPDATE_KIMG=1.024
+PID_KP=0.1
+PID_KI=0.01
+PID_KD=0.05
+PID_DEADBAND=0.02
+PID_INTEGRAL_LIMIT=5
+PID_MAX_CONTROL=0.1
+PID_LR_BOOST=1.25
+PID_LR_MAX_BOOST=1.5
+PID_LR_WARMUP_KIMG=256
+
 cd "${ROOT_DIR}"
 
 RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -267,7 +281,7 @@ resolve_outdir() {
         OUTDIR="${OUTDIR_OVERRIDE}"
         return
     fi
-    # Unique per (schedule, mode, commit, time): never mixes sigmoid with adaptive_v1.
+    # Unique per (schedule, mode, commit, time): never mixes schedule arms.
     SEED_SLUG=""
     if [[ "${SEED}" != "0" ]]; then
         SEED_SLUG="-seed${SEED}"
@@ -311,6 +325,20 @@ build_cmd() {
     if [[ -n "${DURATION}" ]]; then
         CMD+=("--duration=${DURATION}")
     fi
+    if [[ "${SCHEDULE}" == "pid_deadband" ]]; then
+        CMD+=(
+            "--pid-update-kimg=${PID_UPDATE_KIMG}"
+            "--pid-kp=${PID_KP}"
+            "--pid-ki=${PID_KI}"
+            "--pid-kd=${PID_KD}"
+            "--pid-deadband=${PID_DEADBAND}"
+            "--pid-integral-limit=${PID_INTEGRAL_LIMIT}"
+            "--pid-max-control=${PID_MAX_CONTROL}"
+            "--pid-lr-boost=${PID_LR_BOOST}"
+            "--pid-lr-max-boost=${PID_LR_MAX_BOOST}"
+            "--pid-lr-warmup-kimg=${PID_LR_WARMUP_KIMG}"
+        )
+    fi
 }
 
 print_resolved_params() {
@@ -343,6 +371,16 @@ fp16=${FP16}
 enable_amp=${ENABLE_AMP}
 metrics=${METRICS}
 duration=${DURATION:-"(omitted for dry-run)"}
+pid_update_kimg=${PID_UPDATE_KIMG}
+pid_kp=${PID_KP}
+pid_ki=${PID_KI}
+pid_kd=${PID_KD}
+pid_deadband=${PID_DEADBAND}
+pid_integral_limit=${PID_INTEGRAL_LIMIT}
+pid_max_control=${PID_MAX_CONTROL}
+pid_lr_boost=${PID_LR_BOOST}
+pid_lr_max_boost=${PID_LR_MAX_BOOST}
+pid_lr_warmup_kimg=${PID_LR_WARMUP_KIMG}
 data_sha256=$(sha256_file "${DATA}")
 transfer_sha256=$(sha256_file "${TRANSFER}")
 $(collect_git_meta)
@@ -410,12 +448,20 @@ assert_resume_identity_gate() {
     # Directory name should also encode the arm when created by this runner.
     local base
     base="$(basename "${OUTDIR}")"
-    if [[ "${base}" == sigmoid-* && "${SCHEDULE}" != "sigmoid" ]]; then
-        fail "refuse writing adaptive into sigmoid outdir: ${OUTDIR}"
-    fi
-    if [[ "${base}" == adaptive-v1-* && "${SCHEDULE}" != "adaptive_v1" ]]; then
-        fail "refuse writing sigmoid into adaptive-v1 outdir: ${OUTDIR}"
-    fi
+    case "${base}" in
+        sigmoid-*)
+            [[ "${SCHEDULE}" == "sigmoid" ]] ||
+                fail "refuse writing ${SCHEDULE} into sigmoid outdir: ${OUTDIR}"
+            ;;
+        adaptive-v1-*)
+            [[ "${SCHEDULE}" == "adaptive_v1" ]] ||
+                fail "refuse writing ${SCHEDULE} into adaptive-v1 outdir: ${OUTDIR}"
+            ;;
+        pid-deadband-*)
+            [[ "${SCHEDULE}" == "pid_deadband" ]] ||
+                fail "refuse writing ${SCHEDULE} into pid-deadband outdir: ${OUTDIR}"
+            ;;
+    esac
 }
 
 resolve_outdir
