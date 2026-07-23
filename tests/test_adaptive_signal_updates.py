@@ -1,4 +1,5 @@
 import csv
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,11 @@ from training.ct_training_loop import (
     globally_average_runtime_pairs,
     local_adaptive_signal_window_state,
     load_and_migrate_train_summary,
+    pid_learning_rate_config,
+    pid_learning_rate_multiplier,
+    schedule_learning_rate_multiplier,
+    set_optimizer_learning_rate,
+    validate_pid_learning_rate_resume_config,
 )
 from training.schedules import get_schedule
 
@@ -22,6 +28,96 @@ from training.schedules import get_schedule
 class AdaptiveSignalUpdatesTest(unittest.TestCase):
     def test_default_interval_is_half_kimg(self):
         self.assertEqual(adaptive_update_interval_nimg(0.5), 500)
+
+    def test_pid_default_cadence_is_exactly_500_updates_for_25_6_mimg(self):
+        update_nimg = adaptive_update_interval_nimg(51.2)
+        self.assertEqual(update_nimg, 51_200)
+        self.assertEqual(25_600_000 // update_nimg, 500)
+
+    def test_pid_learning_rate_boost_is_bounded_and_warmed_up(self):
+        self.assertEqual(
+            pid_learning_rate_multiplier(0.1, cur_nimg=0),
+            1.0,
+        )
+        halfway = pid_learning_rate_multiplier(
+            0.0, cur_nimg=128_000, boost=1.25,
+            max_boost=1.5, warmup_kimg=256.0,
+        )
+        self.assertAlmostEqual(halfway, 1.125)
+        active = pid_learning_rate_multiplier(
+            math.log(1.1), cur_nimg=256_000, boost=1.25,
+            max_boost=1.5, warmup_kimg=256.0,
+        )
+        self.assertAlmostEqual(active, 1.375)
+        saturated = pid_learning_rate_multiplier(
+            0.5, cur_nimg=256_000, boost=1.25,
+            max_boost=1.5, warmup_kimg=0,
+        )
+        self.assertEqual(saturated, 1.5)
+        self.assertEqual(
+            pid_learning_rate_multiplier(
+                -1.0, cur_nimg=256_000, boost=1.25,
+                max_boost=1.5, warmup_kimg=0,
+            ),
+            1.0,
+        )
+
+    def test_non_pid_schedules_keep_base_learning_rate(self):
+        for schedule in ('const', 'sigmoid', 'adaptive_v1'):
+            with self.subTest(schedule=schedule):
+                self.assertEqual(
+                    schedule_learning_rate_multiplier(
+                        schedule, control_output=0.1, cur_nimg=1_000_000,
+                        pid_lr_boost=1.25, pid_lr_max_boost=1.5,
+                        pid_lr_warmup_kimg=0,
+                    ),
+                    1.0,
+                )
+
+    def test_pid_learning_rate_rejects_invalid_state(self):
+        invalid = [
+            {'control_output': float('nan')},
+            {'control_output': 81.0},
+            {'control_output': 0.0, 'cur_nimg': -1},
+            {'control_output': 0.0, 'boost': 0.9},
+            {'control_output': 0.0, 'max_boost': 0.9},
+            {'control_output': 0.0, 'warmup_kimg': -1.0},
+        ]
+        for kwargs in invalid:
+            params = dict(control_output=0.0, cur_nimg=0)
+            params.update(kwargs)
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                pid_learning_rate_multiplier(**params)
+
+    def test_pid_learning_rate_resume_config_must_match_exactly(self):
+        current = pid_learning_rate_config(
+            1e-4, boost=1.25, max_boost=1.5, warmup_kimg=256.0
+        )
+        validate_pid_learning_rate_resume_config(dict(current), current)
+        for saved in [
+            None,
+            {key: value for key, value in current.items() if key != 'boost'},
+            {**current, 'version': 2},
+            {**current, 'base_learning_rate': 2e-4},
+            {**current, 'boost': 1.3},
+            {**current, 'max_boost': 1.6},
+            {**current, 'warmup_kimg': 128.0},
+        ]:
+            with self.subTest(saved=saved), self.assertRaises(RuntimeError):
+                validate_pid_learning_rate_resume_config(saved, current)
+
+    def test_effective_learning_rate_reaches_every_optimizer_group(self):
+        first = torch.nn.Parameter(torch.tensor(1.0))
+        second = torch.nn.Parameter(torch.tensor(2.0))
+        optimizer = torch.optim.SGD(
+            [{'params': [first]}, {'params': [second], 'lr': 2e-4}],
+            lr=1e-4,
+        )
+        actual = set_optimizer_learning_rate(optimizer, 1e-4, 1.25)
+        self.assertEqual(actual, 1.25e-4)
+        self.assertTrue(all(group['lr'] == actual for group in optimizer.param_groups))
+        with self.assertRaises(ValueError):
+            set_optimizer_learning_rate(optimizer, 1e-4, float('inf'))
 
     def test_updates_at_absolute_boundaries_not_maintenance_ticks(self):
         window = AdaptiveSignalWindow(update_kimg=0.5, start_nimg=0)

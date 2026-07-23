@@ -293,6 +293,108 @@ def globally_average_runtime_pairs(metric_batches, device):
     }
 
 
+def pid_learning_rate_multiplier(control_output, cur_nimg, boost=1.25,
+                                 max_boost=1.5, warmup_kimg=256.0):
+    """Bounded PID-aware LR boost, deterministic from checkpointed state.
+
+    ``control_output`` is the PID u_k used for gap control. Positive control
+    indicates improving loss and permits a slightly larger LR; negative
+    control reduces the boost. The multiplier never falls below 1, so this
+    extension cannot silently lower the user-supplied base LR.
+    """
+    control_output = float(control_output)
+    cur_nimg = int(cur_nimg)
+    boost = float(boost)
+    max_boost = float(max_boost)
+    warmup_kimg = float(warmup_kimg)
+    if not math.isfinite(control_output) or abs(control_output) > 80:
+        raise ValueError(f'PID control output must be finite and within [-80, 80], got {control_output}')
+    if cur_nimg < 0:
+        raise ValueError(f'cur_nimg must be non-negative, got {cur_nimg}')
+    if not math.isfinite(boost) or boost < 1:
+        raise ValueError(f'pid_lr_boost must be finite and >= 1, got {boost}')
+    if not math.isfinite(max_boost) or max_boost < 1:
+        raise ValueError(f'pid_lr_max_boost must be finite and >= 1, got {max_boost}')
+    if not math.isfinite(warmup_kimg) or warmup_kimg < 0:
+        raise ValueError(f'pid_lr_warmup_kimg must be finite and >= 0, got {warmup_kimg}')
+
+    target = max(1.0, min(max_boost, boost * math.exp(control_output)))
+    if warmup_kimg == 0:
+        return target
+    alpha = min(cur_nimg / (warmup_kimg * 1000), 1.0)
+    return 1.0 + alpha * (target - 1.0)
+
+
+def schedule_learning_rate_multiplier(schedule_name, control_output, cur_nimg,
+                                      pid_lr_boost=1.25, pid_lr_max_boost=1.5,
+                                      pid_lr_warmup_kimg=256.0):
+    """Keep every non-PID schedule exactly at its configured base LR."""
+    if schedule_name != 'pid_deadband':
+        return 1.0
+    return pid_learning_rate_multiplier(
+        control_output, cur_nimg, boost=pid_lr_boost,
+        max_boost=pid_lr_max_boost, warmup_kimg=pid_lr_warmup_kimg,
+    )
+
+
+def pid_learning_rate_config(base_learning_rate, boost=1.25,
+                             max_boost=1.5, warmup_kimg=256.0):
+    """Normalize the immutable PID-LR configuration saved in training-state."""
+    base_learning_rate = float(base_learning_rate)
+    if not math.isfinite(base_learning_rate) or base_learning_rate <= 0:
+        raise ValueError(
+            f'optimizer learning rate must be finite and > 0, got {base_learning_rate}'
+        )
+    # Reuse the complete bound validation without introducing mutable state.
+    pid_learning_rate_multiplier(
+        0.0, 0, boost=boost, max_boost=max_boost, warmup_kimg=warmup_kimg
+    )
+    return {
+        'version': 1,
+        'base_learning_rate': base_learning_rate,
+        'boost': float(boost),
+        'max_boost': float(max_boost),
+        'warmup_kimg': float(warmup_kimg),
+    }
+
+
+def validate_pid_learning_rate_resume_config(saved, current):
+    """Reject PID resumes that would silently change the LR trajectory."""
+    if not isinstance(saved, dict):
+        raise RuntimeError('PID training-state missing pid_lr_config')
+    required = tuple(current)
+    missing = [name for name in required if name not in saved]
+    if missing:
+        raise RuntimeError(
+            f'PID training-state pid_lr_config missing: {", ".join(missing)}'
+        )
+    normalized_saved = pid_learning_rate_config(
+        saved['base_learning_rate'], boost=saved['boost'],
+        max_boost=saved['max_boost'], warmup_kimg=saved['warmup_kimg'],
+    )
+    if saved.get('version') != current['version']:
+        raise RuntimeError(
+            f'PID learning-rate config version mismatch: '
+            f'checkpoint={saved.get("version")}, current={current["version"]}'
+        )
+    for name in ('base_learning_rate', 'boost', 'max_boost', 'warmup_kimg'):
+        if normalized_saved[name] != current[name]:
+            raise RuntimeError(
+                f'PID learning-rate config mismatch for {name}: '
+                f'checkpoint={normalized_saved[name]}, current={current[name]}'
+            )
+
+
+def set_optimizer_learning_rate(optimizer, base_learning_rate, multiplier):
+    """Apply one finite positive LR consistently to every parameter group."""
+    learning_rate = float(base_learning_rate) * float(multiplier)
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError(f'effective learning rate must be finite and > 0, got {learning_rate}')
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = learning_rate
+    return learning_rate
+
+
 #----------------------------------------------------------------------------
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
@@ -401,6 +503,9 @@ def training_loop(
     eval_ticks          = 500,      # How often to evaluate models, None = disable.
     double_ticks        = 500,      # How often to evaluate models, None = disable.
     adaptive_update_kimg = 0.5,     # Adaptive loss-EMA signal period, independent of ticks.
+    pid_lr_boost        = 1.25,      # Base LR multiplier for pid_deadband only.
+    pid_lr_max_boost    = 1.5,       # Upper bound for the PID-aware LR multiplier.
+    pid_lr_warmup_kimg  = 256.0,     # Smooth LR boost ramp for pid_deadband.
     resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
     resume_state_dump   = None,     # Start from the given training state, None = reset training state.
     resume_tick         = 0,        # Start from the given training progress.
@@ -446,6 +551,17 @@ def training_loop(
     dist.print0('Setting up optimizer...')
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs)
     optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
+    base_learning_rate = float(optimizer_kwargs['lr'])
+    if not math.isfinite(base_learning_rate) or base_learning_rate <= 0:
+        raise ValueError(f'optimizer learning rate must be finite and > 0, got {base_learning_rate}')
+    initial_schedule_name = getattr(getattr(loss_fn, 'schedule', None), 'name', None)
+    pid_lr_config = (
+        pid_learning_rate_config(
+            base_learning_rate, boost=pid_lr_boost,
+            max_boost=pid_lr_max_boost, warmup_kimg=pid_lr_warmup_kimg,
+        )
+        if initial_schedule_name == 'pid_deadband' else None
+    )
     augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs) if augment_kwargs is not None else None # training.augment.AugmentPipe
     
     # Automatic Mixed Precision
@@ -508,6 +624,10 @@ def training_loop(
         elapsed_base_sec = float(data.get('elapsed_sec', 0.0))
         if hasattr(loss_fn, 'load_schedule_state_dict') and 'loss_fn_state' in data:
             loss_fn.load_schedule_state_dict(data['loss_fn_state'])
+        if pid_lr_config is not None:
+            validate_pid_learning_rate_resume_config(
+                data.get('pid_lr_config'), pid_lr_config
+            )
         if 'adaptive_signal_window_state' in data:
             resumed_adaptive_signal_window_state = data['adaptive_signal_window_state']
         if enable_amp:
@@ -570,7 +690,7 @@ def training_loop(
         schedule_name = loss_kwargs.get('adj', 'unknown')
     adaptive_signal_window = (
         AdaptiveSignalWindow(adaptive_update_kimg, start_nimg=cur_nimg)
-        if schedule_name == 'adaptive_v1' else None
+        if bool(loss_fn.schedule_metadata().get('enabled', False)) else None
     )
     if adaptive_signal_window is not None and resume_state_dump:
         if resumed_adaptive_signal_window_state is None:
@@ -688,6 +808,8 @@ def training_loop(
         )
         if hasattr(loss_fn, 'schedule_state_dict'):
             data['loss_fn_state'] = loss_fn.schedule_state_dict()
+        if pid_lr_config is not None:
+            data['pid_lr_config'] = dict(pid_lr_config)
         if adaptive_signal_window is not None:
             if adaptive_signal_window_state is None:
                 raise RuntimeError('adaptive signal window state was not collected for checkpointing')
@@ -741,9 +863,19 @@ def training_loop(
             if param.grad is not None:
                 torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
 
-        # LR scheduler (if needed in the future)
-        # for g in optimizer.param_groups:
-        #     g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
+        # PID-specific learning-rate extension. The scale is recomputed from
+        # checkpointed progress and controller state, so resumed training uses
+        # exactly the same LR as an uninterrupted run. Fixed schedules remain
+        # at the user-supplied base LR.
+        controller_output = loss_fn.schedule_runtime_metrics()['correction']
+        lr_multiplier = schedule_learning_rate_multiplier(
+            schedule_name, controller_output, cur_nimg,
+            pid_lr_boost=pid_lr_boost, pid_lr_max_boost=pid_lr_max_boost,
+            pid_lr_warmup_kimg=pid_lr_warmup_kimg,
+        )
+        learning_rate = set_optimizer_learning_rate(
+            optimizer, base_learning_rate, lr_multiplier
+        )
 
         # Update weights. Record GradScaler scale / skip for train_summary.csv.
         # scale_before is the scale applied to this step; a drop after update()
@@ -774,6 +906,7 @@ def training_loop(
         training_stats.report0('Progress/step_skipped', step_skipped)
         training_stats.report0('Progress/attempted_iteration', attempted_iteration)
         training_stats.report0('Progress/successful_optimizer_steps', successful_optimizer_steps)
+        training_stats.report0('Progress/learning_rate', learning_rate)
         training_stats.report0('Timing/elapsed_sec', elapsed_sec)
         training_stats.report0('Resources/update_peak_gpu_mem_gb', peak_vram_gb)
 
@@ -807,6 +940,21 @@ def training_loop(
         training_stats.report0('Schedule/adaptive_active', int(schedule_runtime_metrics['adaptive_active']))
         training_stats.report0('Schedule/r_over_t_mean', schedule_runtime_metrics['r_over_t_mean'])
         training_stats.report0('Schedule/gap_mean', schedule_runtime_metrics['gap_mean'])
+        if schedule_runtime_metrics['pid_error'] is not None:
+            training_stats.report0('Schedule/pid_error', schedule_runtime_metrics['pid_error'])
+            training_stats.report0('Schedule/pid_integral', schedule_runtime_metrics['pid_integral'])
+            training_stats.report0('Schedule/pid_derivative', schedule_runtime_metrics['pid_derivative'])
+            training_stats.report0(
+                'Schedule/pid_deadband_active',
+                int(schedule_runtime_metrics['pid_deadband_active']),
+            )
+            next_lr_multiplier = schedule_learning_rate_multiplier(
+                schedule_name, schedule_runtime_metrics['correction'], cur_nimg,
+                pid_lr_boost=pid_lr_boost, pid_lr_max_boost=pid_lr_max_boost,
+                pid_lr_warmup_kimg=pid_lr_warmup_kimg,
+            )
+            training_stats.report0('Schedule/pid_lr_multiplier_used', lr_multiplier)
+            training_stats.report0('Schedule/pid_lr_multiplier_next', next_lr_multiplier)
 
         # Record the exact state that the following loop iteration will see.
         # This cannot be derived reliably from image count: the first iteration
@@ -854,6 +1002,7 @@ def training_loop(
         fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
         fields += [f"kimg {training_stats.report0('Progress/kimg', cur_nimg / 1e3):<9.1f}"]
         fields += [f"loss {training_stats.default_collector['Loss/loss']:<9.5f}"]
+        fields += [f"lr {learning_rate:<9.3g}"]
         fields += [f"grad_scale {grad_scale:<9g}"]
         fields += [f"step_skipped {step_skipped:<7d}"]
         fields += [f"time {dnnlib.util.format_time(training_stats.report0('Timing/total_sec', tick_end_time - start_time)):<12s}"]

@@ -13,6 +13,8 @@ Supported schedules:
     'sigmoid'      Official ECT sigmoid mapping, Eq. (18); training default.
     'adaptive_v1'  Official sigmoid ratio plus a bounded correction driven by
                    the EMA of the globally aggregated training loss.
+    'pid_deadband' Official sigmoid mapping with its relative gap controlled
+                   by a bounded PID controller with a deadband.
 
 The 'const' and 'sigmoid' formulas are verbatim ports of
 ECMLoss.t_to_r_const / ECMLoss.t_to_r_sigmoid in training/loss.py and MUST NOT
@@ -31,8 +33,8 @@ Usage (both forms are supported):
 or a python/numpy scalar or array, which is converted via torch.as_tensor();
 the result is a tensor of the same shape with r clamped to r >= 0. `stage` is
 the official integer curriculum stage maintained by the training loop
-(stage = cur_tick // double_ticks). adaptive_v1 changes only r/t using the
-loss EMA; it does not replace the official stage curriculum.
+(stage = cur_tick // double_ticks). Experimental schedules change only r/t
+using the loss EMA; they do not replace the official stage curriculum.
 """
 
 import math
@@ -316,11 +318,266 @@ class AdaptiveV1Schedule(SigmoidSchedule):
             'adaptive_active': self.correction_is_active(),
         }
 
+
+@register_schedule('pid_deadband')
+class PIDDeadbandSchedule(SigmoidSchedule):
+    """PID control of the official sigmoid schedule's relative gap.
+
+    The globally aggregated loss is smoothed into ``L_ema``. After warm-up,
+    the final warm-up EMA is frozen as ``L_ref`` and the dimensionless error
+    is
+
+        e_k = log(L_ref) - log(L_ema).
+
+    Positive error means that training loss improved. Outside the deadband,
+
+        u_k = Kp e_k + Ki sum(e) + Kd (e_k - e_{k-1})
+        gap_k = gap_official * exp(-u_k)
+
+    where ``gap = (t-r)/t``. Thus improved loss tightens the training pair and
+    worsening loss widens it. Inside ``abs(e_k) < deadband``, ``u_k`` is
+    exactly zero and the integral is frozen. Both the integral and output are
+    bounded to prevent wind-up and extreme exponential scaling.
+    """
+
+    def __init__(self, q=2.0, k=8.0, b=1.0, loss_ema_beta=0.9,
+                 min_gap=1e-3, warmup_updates=2, kp=0.1, ki=0.01,
+                 kd=0.05, deadband=0.02, integral_limit=5.0,
+                 max_control=0.1):
+        super().__init__(q=q, k=k, b=b)
+        for name, value in [('q', q), ('k', k), ('b', b)]:
+            if not math.isfinite(float(value)):
+                raise ValueError(f'{name} must be finite, got {value}')
+        if not math.isfinite(loss_ema_beta) or not 0 <= loss_ema_beta < 1:
+            raise ValueError(f'loss_ema_beta must be in [0, 1), got {loss_ema_beta}')
+        if not math.isfinite(min_gap) or not 0 < min_gap < 1:
+            raise ValueError(f'min_gap must be in (0, 1), got {min_gap}')
+        try:
+            normalized_warmup_updates = int(warmup_updates)
+        except (TypeError, ValueError, OverflowError):
+            normalized_warmup_updates = -1
+        if (isinstance(warmup_updates, bool) or normalized_warmup_updates != warmup_updates
+                or normalized_warmup_updates < 0):
+            raise ValueError(f'warmup_updates must be a non-negative integer, got {warmup_updates}')
+        for name, value in [('kp', kp), ('ki', ki), ('kd', kd),
+                            ('deadband', deadband), ('integral_limit', integral_limit),
+                            ('max_control', max_control)]:
+            if not math.isfinite(float(value)) or float(value) < 0:
+                raise ValueError(f'{name} must be finite and >= 0, got {value}')
+        if max_control > 80:
+            raise ValueError(f'max_control must be <= 80 for stable exponential scaling, got {max_control}')
+
+        self.loss_ema_beta = float(loss_ema_beta)
+        self.min_gap = float(min_gap)
+        self.warmup_updates = normalized_warmup_updates
+        self.kp = float(kp)
+        self.ki = float(ki)
+        self.kd = float(kd)
+        self.deadband = float(deadband)
+        self.integral_limit = float(integral_limit)
+        self.max_control = float(max_control)
+
+        self.loss_ema = None
+        self.loss_reference = None
+        self.signal_updates = 0
+        self.error = 0.0
+        self.previous_error = 0.0
+        self.integral = 0.0
+        self.derivative = 0.0
+        self.control_output = 0.0
+        self.deadband_active = False
+
+    @staticmethod
+    def _clamp(value, lower, upper):
+        return max(lower, min(upper, value))
+
+    def update_training_signal(self, loss):
+        loss = float(loss)
+        if not math.isfinite(loss) or loss < 0:
+            return False
+        loss = max(loss, torch.finfo(torch.float64).tiny)
+        if self.loss_ema is None:
+            updated_ema = loss
+        else:
+            beta = self.loss_ema_beta
+            updated_ema = beta * self.loss_ema + (1 - beta) * loss
+        if not math.isfinite(updated_ema) or updated_ema <= 0:
+            return False
+
+        self.loss_ema = updated_ema
+        self.signal_updates += 1
+        if self.loss_reference is None and (
+            self.warmup_updates == 0 or self.signal_updates == self.warmup_updates
+        ):
+            self.loss_reference = updated_ema
+            self.error = 0.0
+            self.previous_error = 0.0
+            return True
+
+        if self.loss_reference is None or self.signal_updates <= self.warmup_updates:
+            return True
+
+        error = math.log(self.loss_reference) - math.log(self.loss_ema)
+        derivative = error - self.previous_error
+        self.error = error
+        self.derivative = derivative
+
+        # The deadband suppresses all actuation and freezes the integrator.
+        # Updating previous_error still avoids a derivative kick upon exit.
+        if abs(error) < self.deadband or self.max_control == 0:
+            self.control_output = 0.0
+            self.deadband_active = abs(error) < self.deadband
+            self.previous_error = error
+            return True
+
+        self.deadband_active = False
+        candidate_integral = self._clamp(
+            self.integral + error, -self.integral_limit, self.integral_limit
+        )
+        raw_output = self.kp * error + self.ki * candidate_integral + self.kd * derivative
+        output = self._clamp(raw_output, -self.max_control, self.max_control)
+
+        # Conditional integration: if the output is saturated and the new
+        # error pushes farther into saturation, retain the old integral.
+        pushing_high = raw_output > self.max_control and error > 0
+        pushing_low = raw_output < -self.max_control and error < 0
+        if self.ki != 0 and (pushing_high or pushing_low):
+            raw_output = self.kp * error + self.ki * self.integral + self.kd * derivative
+            output = self._clamp(raw_output, -self.max_control, self.max_control)
+        else:
+            self.integral = candidate_integral
+
+        self.control_output = output
+        self.previous_error = error
+        return True
+
+    def correction_is_active(self):
+        return (
+            self.max_control != 0
+            and self.loss_ema is not None
+            and self.loss_reference is not None
+            and self.signal_updates > self.warmup_updates
+        )
+
+    def correction(self):
+        return self.control_output if self.correction_is_active() else 0.0
+
+    def compute_r(self, t, stage):
+        stage = float(stage)
+        if not math.isfinite(stage) or stage < 0:
+            raise ValueError(f'stage must be finite and >= 0, got {stage}')
+        t = _as_tensor(t)
+
+        # The pre-controller path stays bit-identical to official sigmoid.
+        if not self.correction_is_active():
+            return super().compute_r(t=t, stage=stage)
+
+        if not t.is_floating_point():
+            t = t.to(torch.get_default_dtype())
+        finite_max = torch.finfo(t.dtype).max
+        t = torch.nan_to_num(t, nan=0.0, posinf=finite_max, neginf=0.0).clamp_min(0)
+        try:
+            base_r = super().compute_r(t=t, stage=stage)
+        except OverflowError:
+            base_r = t
+        control = self.correction()
+        # This is the strict deadband identity: u_k == 0 implies
+        # g_k == g_0 * exp(0) == g_0. In particular, min_gap must not alter
+        # the official baseline while the controller emits zero actuation.
+        if control == 0.0:
+            return base_r
+
+        base_ratio = torch.where(t > 0, base_r / t, torch.zeros_like(t))
+        base_gap = 1 - base_ratio
+        gap_scale = math.exp(-control)
+        gap = torch.clamp(base_gap * gap_scale, min=self.min_gap, max=1.0)
+        r = torch.nan_to_num(t * (1 - gap), nan=0.0, posinf=finite_max, neginf=0.0)
+        return torch.minimum(r.clamp_min(0), t)
+
+    def state_dict(self):
+        return {
+            'loss_ema': self.loss_ema,
+            'loss_reference': self.loss_reference,
+            'signal_updates': self.signal_updates,
+            'error': self.error,
+            'previous_error': self.previous_error,
+            'integral': self.integral,
+            'derivative': self.derivative,
+            'control_output': self.control_output,
+            'deadband_active': self.deadband_active,
+        }
+
+    def load_state_dict(self, state):
+        loss_ema = state.get('loss_ema')
+        loss_reference = state.get('loss_reference')
+        signal_updates = int(state.get('signal_updates', 0))
+        for name, value in [('loss_ema', loss_ema), ('loss_reference', loss_reference)]:
+            if value is not None and (not math.isfinite(float(value)) or float(value) <= 0):
+                raise ValueError(f'{name} must be finite and > 0, got {value}')
+        if signal_updates < 0:
+            raise ValueError(f'signal_updates must be >= 0, got {signal_updates}')
+        numeric_state = {}
+        for name in ('error', 'previous_error', 'integral', 'derivative', 'control_output'):
+            value = float(state.get(name, 0.0))
+            if not math.isfinite(value):
+                raise ValueError(f'{name} must be finite, got {value}')
+            numeric_state[name] = value
+        if abs(numeric_state['integral']) > self.integral_limit:
+            raise ValueError('integral exceeds configured integral_limit')
+        if abs(numeric_state['control_output']) > self.max_control:
+            raise ValueError('control_output exceeds configured max_control')
+
+        self.loss_ema = None if loss_ema is None else float(loss_ema)
+        self.loss_reference = None if loss_reference is None else float(loss_reference)
+        self.signal_updates = signal_updates
+        self.error = numeric_state['error']
+        self.previous_error = numeric_state['previous_error']
+        self.integral = numeric_state['integral']
+        self.derivative = numeric_state['derivative']
+        self.control_output = numeric_state['control_output']
+        self.deadband_active = bool(state.get('deadband_active', False))
+
+    def metadata(self):
+        return {
+            'name': self.name,
+            'enabled': True,
+            'signal': 'loss_ema',
+            'control_target': 'official_relative_gap',
+            'q': self.q,
+            'k': self.k,
+            'b': self.b,
+            'loss_ema_beta': self.loss_ema_beta,
+            'warmup_updates': self.warmup_updates,
+            'min_gap': self.min_gap,
+            'kp': self.kp,
+            'ki': self.ki,
+            'kd': self.kd,
+            'deadband': self.deadband,
+            'integral_limit': self.integral_limit,
+            'max_control': self.max_control,
+            'error_definition': 'log(loss_reference)-log(loss_ema)',
+            **self.runtime_metrics(),
+        }
+
+    def runtime_metrics(self):
+        return {
+            'loss_ema': self.loss_ema,
+            'loss_reference': self.loss_reference,
+            # Keep the stable telemetry key; for this schedule it is u_k.
+            'correction': self.correction(),
+            'signal_updates': self.signal_updates,
+            'adaptive_active': self.correction_is_active(),
+            'pid_error': self.error,
+            'pid_integral': self.integral,
+            'pid_derivative': self.derivative,
+            'pid_deadband_active': self.deadband_active,
+        }
+
 def continuous_stage(cur_tick, double_ticks):
     """Legacy fractional-stage helper retained for import compatibility.
 
-    adaptive_v1 now uses the official integer stage and adapts only from the
-    loss EMA; new training code should not use this helper.
+    Experimental schedules use the official integer stage and adapt only from
+    the loss EMA; new training code should not use this helper.
     """
     if double_ticks <= 0:
         raise ValueError(f'double_ticks must be > 0, got {double_ticks}')
@@ -341,9 +598,10 @@ if __name__ == '__main__':
     print('r/t with q=2, k=8, b=1 at t =', t.tolist())
     for name in available_schedules():
         schedule = get_schedule(name)
-        if name == 'adaptive_v1':
+        if schedule.metadata()['enabled']:
             schedule.update_training_signal(10.0)
             schedule.update_training_signal(7.0)
+            schedule.update_training_signal(5.0)
         print(f'--- {name} ---')
         for stage in [0, 1, 3, 7]:
             ratio = schedule.compute_r(t=t, stage=stage) / t

@@ -14,15 +14,17 @@ from training.schedules import get_schedule
 class ECMLoss:
     def __init__(self, P_mean=-1.1, P_std=2.0, sigma_data=0.5, q=2, c=0.0, k=8.0, b=1.0, cut=4.0,
                  adj='sigmoid', adaptive_loss_ema_beta=0.9, adaptive_max_adjust=0.05,
-                 adaptive_min_gap=1e-3, adaptive_warmup_updates=2):
+                 adaptive_min_gap=1e-3, adaptive_warmup_updates=2,
+                 pid_kp=0.1, pid_ki=0.01, pid_kd=0.05, pid_deadband=0.02,
+                 pid_integral_limit=5.0, pid_max_control=0.1):
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
         
         # t -> r entry point, dispatched through training/schedules.py.
         # 'const' / 'sigmoid' are the official fixed formulas (bit-identical
-        # to the reference methods below); 'adaptive_v1' is the Role C
-        # experiment.
+        # to the reference methods below); adaptive schedules are isolated
+        # experiments layered on top of the sigmoid baseline.
         schedule_kwargs = dict(q=q, k=k, b=b)
         if adj == 'adaptive_v1':
             schedule_kwargs.update(
@@ -30,6 +32,18 @@ class ECMLoss:
                 max_adjust=adaptive_max_adjust,
                 min_gap=adaptive_min_gap,
                 warmup_updates=adaptive_warmup_updates,
+            )
+        elif adj == 'pid_deadband':
+            schedule_kwargs.update(
+                loss_ema_beta=adaptive_loss_ema_beta,
+                min_gap=adaptive_min_gap,
+                warmup_updates=adaptive_warmup_updates,
+                kp=pid_kp,
+                ki=pid_ki,
+                kd=pid_kd,
+                deadband=pid_deadband,
+                integral_limit=pid_integral_limit,
+                max_control=pid_max_control,
             )
         self.schedule = get_schedule(adj, **schedule_kwargs)
 
@@ -86,6 +100,10 @@ class ECMLoss:
             'adaptive_active': bool(metrics['adaptive_active']),
             'r_over_t_mean': float(self._runtime_r_over_t_mean),
             'gap_mean': float(self._runtime_gap_mean),
+            'pid_error': metrics.get('pid_error'),
+            'pid_integral': metrics.get('pid_integral'),
+            'pid_derivative': metrics.get('pid_derivative'),
+            'pid_deadband_active': metrics.get('pid_deadband_active'),
         }
 
     def _record_schedule_runtime_pair(self, t, r):

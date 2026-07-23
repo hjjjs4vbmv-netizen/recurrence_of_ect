@@ -1,5 +1,6 @@
 import contextlib
 import io
+import math
 import pickle
 import unittest
 
@@ -231,6 +232,167 @@ class AdaptiveV1Test(unittest.TestCase):
             continuous_stage(cur_tick=1, double_ticks=0)
 
 
+class PIDDeadbandTest(unittest.TestCase):
+    def test_without_active_controller_is_official_sigmoid_bitwise(self):
+        t = sample_t()
+        pid = get_schedule('pid_deadband', q=256.0)
+        expected = get_schedule('sigmoid', q=256.0).compute_r(t=t, stage=3)
+        self.assertTrue(torch.equal(pid.compute_r(t=t, stage=3), expected))
+        pid.update_training_signal(10.0)
+        self.assertTrue(torch.equal(pid.compute_r(t=t, stage=3), expected))
+
+    def test_pid_formula_scales_official_gap_exponentially(self):
+        t = sample_t(dtype=torch.float64)
+        pid = get_schedule(
+            'pid_deadband', loss_ema_beta=0.0, warmup_updates=1,
+            kp=0.2, ki=0.0, kd=0.0, deadband=0.0,
+            max_control=1.0, min_gap=1e-6,
+        )
+        pid.update_training_signal(10.0)
+        pid.update_training_signal(5.0)
+        expected_u = 0.2 * math.log(2.0)
+        self.assertAlmostEqual(pid.correction(), expected_u)
+
+        base_r = get_schedule('sigmoid').compute_r(t=t, stage=2)
+        base_gap = 1 - base_r / t
+        expected_r = t * (1 - torch.clamp(
+            base_gap * math.exp(-expected_u), min=1e-6, max=1.0
+        ))
+        self.assertTrue(torch.allclose(pid.compute_r(t=t, stage=2), expected_r))
+        self.assertTrue((pid.compute_r(t=t, stage=2) >= base_r).all())
+
+    def test_combined_pid_output_matches_discrete_formula(self):
+        kp, ki, kd = 0.2, 0.03, 0.04
+        pid = get_schedule(
+            'pid_deadband', loss_ema_beta=0.0, warmup_updates=1,
+            kp=kp, ki=ki, kd=kd, deadband=0.0,
+            integral_limit=10.0, max_control=10.0,
+        )
+        pid.update_training_signal(10.0)
+        pid.update_training_signal(8.0)
+        first_error = math.log(10.0) - math.log(8.0)
+        self.assertAlmostEqual(
+            pid.correction(),
+            kp * first_error + ki * first_error + kd * first_error,
+        )
+
+        pid.update_training_signal(5.0)
+        second_error = math.log(10.0) - math.log(5.0)
+        expected = (
+            kp * second_error
+            + ki * (first_error + second_error)
+            + kd * (second_error - first_error)
+        )
+        self.assertAlmostEqual(pid.correction(), expected)
+
+    def test_worsening_loss_widens_the_gap(self):
+        t = sample_t()
+        pid = get_schedule(
+            'pid_deadband', loss_ema_beta=0.0, warmup_updates=1,
+            kp=0.1, ki=0.0, kd=0.0, deadband=0.0, max_control=1.0,
+        )
+        pid.update_training_signal(10.0)
+        pid.update_training_signal(20.0)
+        base_r = get_schedule('sigmoid').compute_r(t=t, stage=2)
+        self.assertLess(pid.correction(), 0)
+        self.assertTrue((pid.compute_r(t=t, stage=2) <= base_r).all())
+
+    def test_deadband_zeroes_output_and_freezes_integral(self):
+        pid = get_schedule(
+            'pid_deadband', loss_ema_beta=0.0, warmup_updates=1,
+            kp=1.0, ki=1.0, kd=1.0, deadband=0.02,
+        )
+        pid.update_training_signal(10.0)
+        pid.update_training_signal(9.9)
+        self.assertTrue(pid.deadband_active)
+        self.assertEqual(pid.correction(), 0.0)
+        self.assertEqual(pid.integral, 0.0)
+        self.assertAlmostEqual(pid.previous_error, math.log(10.0 / 9.9))
+
+    def test_deadband_is_exact_identity_even_when_min_gap_would_bind(self):
+        t = sample_t()
+        pid = get_schedule(
+            'pid_deadband', q=256.0, loss_ema_beta=0.0, warmup_updates=1,
+            deadband=0.02, min_gap=0.1,
+        )
+        pid.update_training_signal(10.0)
+        pid.update_training_signal(9.9)
+        expected = get_schedule('sigmoid', q=256.0).compute_r(t=t, stage=1)
+        self.assertTrue(pid.deadband_active)
+        self.assertEqual(pid.correction(), 0.0)
+        self.assertTrue(torch.equal(pid.compute_r(t=t, stage=1), expected))
+
+    def test_integral_and_output_are_bounded(self):
+        pid = get_schedule(
+            'pid_deadband', loss_ema_beta=0.0, warmup_updates=1,
+            kp=0.0, ki=1.0, kd=0.0, deadband=0.0,
+            integral_limit=0.5, max_control=0.5,
+        )
+        pid.update_training_signal(10.0)
+        for loss in [5.0, 2.5, 1.25]:
+            pid.update_training_signal(loss)
+        self.assertLessEqual(abs(pid.integral), 0.5)
+        self.assertLessEqual(abs(pid.correction()), 0.5)
+
+    def test_derivative_responds_to_error_reversal(self):
+        pid = get_schedule(
+            'pid_deadband', loss_ema_beta=0.0, warmup_updates=1,
+            kp=0.0, ki=0.0, kd=0.1, deadband=0.0, max_control=1.0,
+        )
+        pid.update_training_signal(10.0)
+        pid.update_training_signal(5.0)
+        positive = pid.correction()
+        pid.update_training_signal(20.0)
+        self.assertGreater(positive, 0)
+        self.assertLess(pid.derivative, 0)
+        self.assertLess(pid.correction(), 0)
+
+    def test_state_round_trip_preserves_controller_and_output(self):
+        t = sample_t()
+        kwargs = dict(
+            loss_ema_beta=0.5, warmup_updates=1, kp=0.2, ki=0.03,
+            kd=0.04, deadband=0.01, integral_limit=2.0, max_control=0.2,
+        )
+        source = get_schedule('pid_deadband', **kwargs)
+        for loss in [10.0, 8.0, 6.0, 7.0]:
+            source.update_training_signal(loss)
+        clone = get_schedule('pid_deadband', **kwargs)
+        clone.load_state_dict(source.state_dict())
+        self.assertEqual(clone.metadata(), source.metadata())
+        self.assertTrue(torch.equal(
+            clone.compute_r(t=t, stage=2), source.compute_r(t=t, stage=2)
+        ))
+
+    def test_nonfinite_signals_are_ignored_and_active_output_stays_finite(self):
+        pid = get_schedule(
+            'pid_deadband', loss_ema_beta=0.0, warmup_updates=1,
+            deadband=0.0,
+        )
+        for loss in [float('nan'), float('inf'), -1.0]:
+            self.assertFalse(pid.update_training_signal(loss))
+        self.assertEqual(pid.signal_updates, 0)
+        self.assertIsNone(pid.loss_ema)
+
+        pid.update_training_signal(10.0)
+        pid.update_training_signal(8.0)
+        t = torch.tensor([0.0, 0.1, 1.0, float('inf'), float('nan')])
+        r = pid.compute_r(t=t, stage=3)
+        self.assertTrue(torch.isfinite(r).all())
+        self.assertTrue((r >= 0).all())
+        finite_t = torch.isfinite(t) & (t >= 0)
+        self.assertTrue((r[finite_t] <= t[finite_t]).all())
+
+    def test_invalid_parameters_are_rejected(self):
+        for kwargs in [
+            {'kp': -1.0}, {'ki': float('nan')}, {'kd': -0.1},
+            {'deadband': -0.1}, {'integral_limit': -1.0},
+            {'max_control': 81.0}, {'loss_ema_beta': 1.0},
+            {'warmup_updates': 1.5}, {'min_gap': 1.0},
+        ]:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                get_schedule('pid_deadband', **kwargs)
+
+
 class InterfaceTest(unittest.TestCase):
     def test_documented_call_forms_agree(self):
         t = sample_t()
@@ -251,7 +413,10 @@ class InterfaceTest(unittest.TestCase):
         self.assertAlmostEqual(float(r), 1.0)
 
     def test_available_schedules(self):
-        self.assertEqual(schedules.available_schedules(), ['adaptive_v1', 'const', 'sigmoid'])
+        self.assertEqual(
+            schedules.available_schedules(),
+            ['adaptive_v1', 'const', 'pid_deadband', 'sigmoid'],
+        )
 
     def test_unknown_schedule_rejected(self):
         with self.assertRaises(ValueError):
@@ -271,7 +436,8 @@ class ECMLossIntegrationTest(unittest.TestCase):
     def test_loss_holds_matching_schedule_instance(self):
         for adj, cls in [('const', schedules.ConstSchedule),
                          ('sigmoid', schedules.SigmoidSchedule),
-                         ('adaptive_v1', schedules.AdaptiveV1Schedule)]:
+                         ('adaptive_v1', schedules.AdaptiveV1Schedule),
+                         ('pid_deadband', schedules.PIDDeadbandSchedule)]:
             with self.subTest(adj=adj):
                 self.assertIsInstance(make_loss(adj).schedule, cls)
 
@@ -304,10 +470,31 @@ class ECMLossIntegrationTest(unittest.TestCase):
         self.assertEqual(metadata['max_adjust'], 0.04)
         self.assertEqual(metadata['min_gap'], 0.002)
 
+    def test_pid_hyperparams_reach_schedule_metadata(self):
+        loss_fn = make_loss(
+            'pid_deadband', adaptive_loss_ema_beta=0.8,
+            adaptive_warmup_updates=3, adaptive_min_gap=0.002,
+            pid_kp=0.2, pid_ki=0.03, pid_kd=0.04, pid_deadband=0.01,
+            pid_integral_limit=2.0, pid_max_control=0.2,
+        )
+        metadata = loss_fn.schedule_metadata()
+        self.assertEqual(metadata['name'], 'pid_deadband')
+        self.assertTrue(metadata['enabled'])
+        self.assertEqual(metadata['loss_ema_beta'], 0.8)
+        self.assertEqual(metadata['warmup_updates'], 3)
+        self.assertEqual(metadata['min_gap'], 0.002)
+        self.assertEqual(metadata['kp'], 0.2)
+        self.assertEqual(metadata['ki'], 0.03)
+        self.assertEqual(metadata['kd'], 0.04)
+        self.assertEqual(metadata['deadband'], 0.01)
+        self.assertEqual(metadata['integral_limit'], 2.0)
+        self.assertEqual(metadata['max_control'], 0.2)
+
     def test_schedule_runtime_metrics_has_stable_contract(self):
         required = {
             'loss_ema', 'loss_reference', 'correction', 'signal_updates',
-            'adaptive_active', 'r_over_t_mean', 'gap_mean',
+            'adaptive_active', 'r_over_t_mean', 'gap_mean', 'pid_error',
+            'pid_integral', 'pid_derivative', 'pid_deadband_active',
         }
         fixed = make_loss('sigmoid')
         fixed_metrics = fixed.schedule_runtime_metrics()
@@ -324,6 +511,19 @@ class ECMLossIntegrationTest(unittest.TestCase):
         self.assertEqual(adaptive_metrics['signal_updates'], 3)
         self.assertTrue(adaptive_metrics['adaptive_active'])
         self.assertGreater(adaptive_metrics['correction'], 0)
+        self.assertIsNone(adaptive_metrics['pid_error'])
+
+        pid = make_loss(
+            'pid_deadband', adaptive_loss_ema_beta=0.0,
+            adaptive_warmup_updates=1,
+        )
+        pid.update_training_signal(10.0)
+        pid.update_training_signal(9.9)
+        pid_metrics = pid.schedule_runtime_metrics()
+        self.assertEqual(set(pid_metrics), required)
+        self.assertAlmostEqual(pid_metrics['pid_error'], math.log(10.0 / 9.9))
+        self.assertEqual(pid_metrics['pid_integral'], 0.0)
+        self.assertTrue(pid_metrics['pid_deadband_active'])
 
     def test_schedule_runtime_pair_means_match_realized_t_and_r(self):
         loss_fn = make_loss('sigmoid')
@@ -367,6 +567,21 @@ class ECMLossIntegrationTest(unittest.TestCase):
         clone.load_schedule_state_dict(source.schedule_state_dict())
         self.assertEqual(clone.schedule_metadata(), source.schedule_metadata())
 
+    def test_schedule_state_dict_restores_pid_state(self):
+        source = make_loss(
+            'pid_deadband', q=2.0, adaptive_loss_ema_beta=0.0,
+            adaptive_warmup_updates=1,
+        )
+        source.update_schedule(3)
+        for loss in [10.0, 8.0, 6.0]:
+            source.update_training_signal(loss)
+        clone = make_loss(
+            'pid_deadband', q=2.0, adaptive_loss_ema_beta=0.0,
+            adaptive_warmup_updates=1,
+        )
+        self.assertTrue(clone.load_schedule_state_dict(source.schedule_state_dict()))
+        self.assertEqual(clone.schedule_metadata(), source.schedule_metadata())
+
     def test_explicit_fixed_schedule_ignores_saved_adaptive_state(self):
         adaptive = make_loss('adaptive_v1')
         adaptive.update_training_signal(10.0)
@@ -408,6 +623,15 @@ class ECMLossCallCudaTest(unittest.TestCase):
     def test_call_adaptive_v1_loss_signal_changes_loss(self):
         baseline = self.full_loss('adaptive_v1', stage=1)
         adapted = self.full_loss('adaptive_v1', stage=1, losses=(10.0, 5.0, 2.5))
+        self.assertFalse(torch.equal(baseline, adapted))
+
+    def test_call_sigmoid_equals_pid_deadband_before_updates(self):
+        self.assertTrue(torch.equal(self.full_loss('sigmoid', stage=1),
+                                    self.full_loss('pid_deadband', stage=1)))
+
+    def test_call_pid_deadband_signal_changes_loss(self):
+        baseline = self.full_loss('pid_deadband', stage=1)
+        adapted = self.full_loss('pid_deadband', stage=1, losses=(10.0, 5.0, 2.5))
         self.assertFalse(torch.equal(baseline, adapted))
 
 
