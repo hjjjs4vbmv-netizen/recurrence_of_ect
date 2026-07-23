@@ -152,14 +152,22 @@ def main():
 
     while True:
         rows = read_rows(summary_path)
+        status = None
         if rows:
-            status = render(rows, output)
-            print(
-                f"dashboard: attempted={status['attempted_iterations']} "
-                f"successful={status['successful_optimizer_steps']} "
-                f"skipped={status['skipped_steps']}",
-                flush=True,
-            )
+            try:
+                status = render(rows, output)
+            except (KeyError, ValueError, IndexError) as exc:
+                print(f"dashboard waiting for a complete CSV row: {exc}", flush=True)
+            else:
+                print(
+                    f"dashboard: attempted={status['attempted_iterations']} "
+                    f"successful={status['successful_optimizer_steps']} "
+                    f"skipped={status['skipped_steps']}",
+                    flush=True,
+                )
+        if status is not None and args.stop_after is not None:
+            if status["attempted_iterations"] >= args.stop_after:
+                break
         if args.once:
             if not rows:
                 raise SystemExit(f"no training rows found in {summary_path}")
