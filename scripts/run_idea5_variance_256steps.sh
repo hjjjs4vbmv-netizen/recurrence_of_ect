@@ -49,7 +49,7 @@ echo "Idea 5 256-step run directory: ${RUN_DIR}"
 echo "Live dashboard: ${RUN_DIR}/live_training.png"
 echo "Live status: ${RUN_DIR}/live_status.json"
 
-run_in_env python -u     "${ROOT_DIR}/scripts/monitor_idea5_variance_run.py"     "${RUN_DIR}"     --output "${RUN_DIR}/live_training.png"     --interval 5 &
+run_in_env python -u     "${ROOT_DIR}/scripts/monitor_idea5_variance_run.py"     "${RUN_DIR}"     --output "${RUN_DIR}/live_training.png"     --interval 5 --stop-after "${MAX_STEPS}" &
 MONITOR_PID=$!
 
 run_in_env torchrun     --nnodes=1     --nproc_per_node=1     --rdzv_backend=c10d     --rdzv_endpoint="localhost:${PORT}"     "${ROOT_DIR}/ct_train.py"     --outdir="${RUN_DIR}"     --nosubdir     --data="${DATA_PATH}"     --transfer="${TRANSFER_PATH}"     --cond=False     --arch=ddpmpp     --schedule=adaptive_variance_v1     --adaptive-update-kimg=0.5     --adaptive-warmup-updates=2     --adaptive-variance-ema-beta=0.9     --adaptive-variance-strength=1.0     --adaptive-min-gap-scale=0.5     --adaptive-num-bins=4     --max-steps="${MAX_STEPS}"     --duration=200     --batch=128     --batch-gpu=16     --optim=RAdam     --lr=0.0001     --dropout=0.2     --augment=0     --seed="${SEED}"     --workers=1     --cache=False     --fp16=True     --enable_amp=True     --tf32=False     --bench=True     --metrics=none     --tick=1     --snap=10000     --dump=10000     --ckpt=10000     --sample_every=8     --eval_every=10000     --double=10000     -q 256     -k 8     -b 1     -c 0     --desc=idea5-variance-256steps
