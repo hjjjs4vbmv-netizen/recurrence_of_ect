@@ -14,7 +14,9 @@ from training.schedules import get_schedule
 class ECMLoss:
     def __init__(self, P_mean=-1.1, P_std=2.0, sigma_data=0.5, q=2, c=0.0, k=8.0, b=1.0, cut=4.0,
                  adj='sigmoid', adaptive_loss_ema_beta=0.9, adaptive_max_adjust=0.05,
-                 adaptive_min_gap=1e-3, adaptive_warmup_updates=2):
+                 adaptive_min_gap=1e-3, adaptive_warmup_updates=2,
+                 adaptive_variance_ema_beta=0.9, adaptive_variance_strength=1.0,
+                 adaptive_min_gap_scale=0.5, adaptive_num_bins=4):
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
@@ -30,6 +32,16 @@ class ECMLoss:
                 max_adjust=adaptive_max_adjust,
                 min_gap=adaptive_min_gap,
                 warmup_updates=adaptive_warmup_updates,
+            )
+        elif adj == 'adaptive_variance_v1':
+            schedule_kwargs.update(
+                variance_ema_beta=adaptive_variance_ema_beta,
+                variance_strength=adaptive_variance_strength,
+                min_gap_scale=adaptive_min_gap_scale,
+                num_bins=adaptive_num_bins,
+                warmup_updates=adaptive_warmup_updates,
+                p_mean=P_mean,
+                p_std=P_std,
             )
         self.schedule = get_schedule(adj, **schedule_kwargs)
 
@@ -157,4 +169,6 @@ class ECMLoss:
             loss = torch.sqrt(loss)
         
         # Weighting fn
-        return loss / (t - r).flatten()
+        weighted_loss = loss / (t - r).flatten()
+        self.schedule.observe_training_batch(loss=weighted_loss, t=t)
+        return weighted_loss
