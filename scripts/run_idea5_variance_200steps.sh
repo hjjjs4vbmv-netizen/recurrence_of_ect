@@ -72,10 +72,10 @@ run_in_env torchrun \
     --sample_every=10000 \
     --eval_every=10000 \
     --double=10000 \
-    -q=256 \
-    -k=8 \
-    -b=1 \
-    -c=0 \
+    -q 256 \
+    -k 8 \
+    -b 1 \
+    -c 0 \
     --desc=idea5-variance-200steps
 
 run_in_env python - "${RUN_DIR}" <<'PY'
