@@ -7,6 +7,12 @@ import json
 import math
 import pickle
 from pathlib import Path
+import sys
+
+# Pickled checkpoints reference repository-local modules such as torch_utils.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 from PIL import Image, ImageDraw
