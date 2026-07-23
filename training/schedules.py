@@ -36,6 +36,7 @@ loss EMA; it does not replace the official stage curriculum.
 """
 
 import math
+from statistics import NormalDist
 
 import torch
 
@@ -91,6 +92,10 @@ class Schedule:
     def update_training_signal(self, loss):
         del loss
         return False
+
+    def observe_training_batch(self, loss, t):
+        """Observe per-sample training data for schedules that need it."""
+        del loss, t
 
     def runtime_metrics(self):
         """Stable controller telemetry contract for training/evaluation code."""
@@ -315,6 +320,266 @@ class AdaptiveV1Schedule(SigmoidSchedule):
             'signal_updates': self.signal_updates,
             'adaptive_active': self.correction_is_active(),
         }
+
+@register_schedule('adaptive_variance_v1')
+class AdaptiveVarianceV1Schedule(SigmoidSchedule):
+    """Per-noise-bin normalized-loss-variance controller (Idea 5).
+
+    Samples are divided into equal-probability bins under the configured
+    log-normal t distribution.  Each bin tracks
+
+        V = Var(loss) / max(E[loss]^2, eps)
+
+    and scales the official sigmoid gap multiplicatively as
+
+        gap = gap_0 / (1 + variance_strength * EMA(V)).
+
+    High-variance regions therefore receive an easier (smaller-gap) pair.
+    Before the warm-up completes this schedule is bit-identical to sigmoid.
+    """
+
+    def __init__(
+        self, q=2.0, k=8.0, b=1.0, variance_ema_beta=0.9,
+        variance_strength=1.0, min_gap_scale=0.5, num_bins=4,
+        warmup_updates=2, p_mean=-1.1, p_std=2.0,
+    ):
+        super().__init__(q=q, k=k, b=b)
+        if not math.isfinite(variance_ema_beta) or not 0 <= variance_ema_beta < 1:
+            raise ValueError(
+                f'variance_ema_beta must be in [0, 1), got {variance_ema_beta}'
+            )
+        if not math.isfinite(variance_strength) or variance_strength < 0:
+            raise ValueError(
+                f'variance_strength must be finite and >= 0, got {variance_strength}'
+            )
+        if not math.isfinite(min_gap_scale) or not 0 < min_gap_scale <= 1:
+            raise ValueError(
+                f'min_gap_scale must be in (0, 1], got {min_gap_scale}'
+            )
+        if isinstance(num_bins, bool) or int(num_bins) != num_bins or int(num_bins) < 2:
+            raise ValueError(f'num_bins must be an integer >= 2, got {num_bins}')
+        if (
+            isinstance(warmup_updates, bool)
+            or int(warmup_updates) != warmup_updates
+            or int(warmup_updates) < 0
+        ):
+            raise ValueError(
+                f'warmup_updates must be a non-negative integer, got {warmup_updates}'
+            )
+        if not math.isfinite(p_mean):
+            raise ValueError(f'p_mean must be finite, got {p_mean}')
+        if not math.isfinite(p_std) or p_std <= 0:
+            raise ValueError(f'p_std must be finite and > 0, got {p_std}')
+
+        self.variance_ema_beta = float(variance_ema_beta)
+        self.variance_strength = float(variance_strength)
+        self.min_gap_scale = float(min_gap_scale)
+        self.num_bins = int(num_bins)
+        self.warmup_updates = int(warmup_updates)
+        self.p_mean = float(p_mean)
+        self.p_std = float(p_std)
+        normal = NormalDist()
+        self.log_t_bin_edges = [
+            self.p_mean + self.p_std * normal.inv_cdf(index / self.num_bins)
+            for index in range(1, self.num_bins)
+        ]
+        self.variance_ema = [None] * self.num_bins
+        self.signal_updates = 0
+        self._bin_loss_sum = [0.0] * self.num_bins
+        self._bin_loss_sq_sum = [0.0] * self.num_bins
+        self._bin_count = [0.0] * self.num_bins
+
+    def _bin_indices(self, t):
+        t = _as_tensor(t)
+        if not t.is_floating_point():
+            t = t.to(torch.get_default_dtype())
+        tiny = torch.finfo(t.dtype).tiny
+        log_t = t.reshape(-1).clamp_min(tiny).log()
+        edges = torch.as_tensor(
+            self.log_t_bin_edges, dtype=log_t.dtype, device=log_t.device
+        )
+        return torch.bucketize(log_t, edges)
+
+    def observe_training_batch(self, loss, t):
+        loss = _as_tensor(loss).detach().reshape(-1).to(torch.float64)
+        bins = self._bin_indices(t).reshape(-1)
+        if loss.numel() != bins.numel():
+            raise ValueError(
+                f'loss/t sample count mismatch: {loss.numel()} != {bins.numel()}'
+            )
+        valid = torch.isfinite(loss) & (loss >= 0)
+        loss = torch.where(valid, loss, torch.zeros_like(loss))
+        bins = bins.to(device=loss.device)
+        packed = torch.zeros(
+            [3, self.num_bins], dtype=torch.float64, device=loss.device
+        )
+        packed[0].scatter_add_(0, bins, loss)
+        packed[1].scatter_add_(0, bins, loss.square())
+        packed[2].scatter_add_(0, bins, valid.to(torch.float64))
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.all_reduce(packed)
+        values = packed.cpu()
+        for index in range(self.num_bins):
+            self._bin_loss_sum[index] += float(values[0, index])
+            self._bin_loss_sq_sum[index] += float(values[1, index])
+            self._bin_count[index] += float(values[2, index])
+
+    def update_training_signal(self, loss):
+        # The scalar is the existing update-window trigger. Per-bin moments
+        # were already accumulated by observe_training_batch().
+        del loss
+        updated_any = False
+        tiny = torch.finfo(torch.float64).tiny
+        for index in range(self.num_bins):
+            count = self._bin_count[index]
+            if count <= 0:
+                continue
+            mean = self._bin_loss_sum[index] / count
+            second_moment = self._bin_loss_sq_sum[index] / count
+            variance = max(second_moment - mean * mean, 0.0)
+            normalized_variance = variance / max(mean * mean, tiny)
+            if not math.isfinite(normalized_variance):
+                continue
+            previous = self.variance_ema[index]
+            if previous is None:
+                updated = normalized_variance
+            else:
+                beta = self.variance_ema_beta
+                updated = beta * previous + (1 - beta) * normalized_variance
+            self.variance_ema[index] = updated
+            updated_any = True
+
+        self._bin_loss_sum = [0.0] * self.num_bins
+        self._bin_loss_sq_sum = [0.0] * self.num_bins
+        self._bin_count = [0.0] * self.num_bins
+        if updated_any:
+            self.signal_updates += 1
+        return updated_any
+
+    def correction_is_active(self):
+        return (
+            self.variance_strength > 0
+            and self.signal_updates > self.warmup_updates
+            and any(value is not None for value in self.variance_ema)
+        )
+
+    def gap_scales(self):
+        if not self.correction_is_active():
+            return [1.0] * self.num_bins
+        scales = []
+        for value in self.variance_ema:
+            if value is None:
+                scale = 1.0
+            else:
+                scale = 1 / (1 + self.variance_strength * value)
+            scales.append(min(1.0, max(self.min_gap_scale, scale)))
+        return scales
+
+    def correction(self):
+        scales = self.gap_scales()
+        return sum(scale - 1 for scale in scales) / len(scales)
+
+    def compute_r(self, t, stage):
+        stage = float(stage)
+        if not math.isfinite(stage) or stage < 0:
+            raise ValueError(f'stage must be finite and >= 0, got {stage}')
+        t = _as_tensor(t)
+        if not self.correction_is_active():
+            return super().compute_r(t=t, stage=stage)
+        if not t.is_floating_point():
+            t = t.to(torch.get_default_dtype())
+        finite_max = torch.finfo(t.dtype).max
+        clean_t = torch.nan_to_num(
+            t, nan=0.0, posinf=finite_max, neginf=0.0
+        ).clamp_min(0)
+        try:
+            base_r = super().compute_r(t=clean_t, stage=stage)
+        except OverflowError:
+            base_r = clean_t
+        base_ratio = torch.where(
+            clean_t > 0, base_r / clean_t, torch.zeros_like(clean_t)
+        )
+        base_gap = 1 - base_ratio
+        bin_indices = self._bin_indices(clean_t)
+        scales = torch.as_tensor(
+            self.gap_scales(), dtype=clean_t.dtype, device=clean_t.device
+        )
+        gap = (base_gap.reshape(-1) * scales[bin_indices]).reshape(base_gap.shape)
+        gap = gap.clamp(min=torch.finfo(clean_t.dtype).eps, max=1)
+        r = clean_t * (1 - gap)
+        return torch.minimum(
+            torch.nan_to_num(r, nan=0.0, posinf=finite_max, neginf=0.0).clamp_min(0),
+            clean_t,
+        )
+
+    def state_dict(self):
+        return {
+            'variance_ema': self.variance_ema,
+            'signal_updates': self.signal_updates,
+            'bin_loss_sum': self._bin_loss_sum,
+            'bin_loss_sq_sum': self._bin_loss_sq_sum,
+            'bin_count': self._bin_count,
+        }
+
+    def load_state_dict(self, state):
+        variance_ema = list(state.get('variance_ema', [None] * self.num_bins))
+        if len(variance_ema) != self.num_bins:
+            raise ValueError('variance_ema bin count does not match configuration')
+        for value in variance_ema:
+            if value is not None and (not math.isfinite(float(value)) or value < 0):
+                raise ValueError(f'variance EMA must be finite and >= 0, got {value}')
+        self.variance_ema = [
+            None if value is None else float(value) for value in variance_ema
+        ]
+        self.signal_updates = int(state.get('signal_updates', 0))
+        if self.signal_updates < 0:
+            raise ValueError('signal_updates must be >= 0')
+        for attribute, key in [
+            ('_bin_loss_sum', 'bin_loss_sum'),
+            ('_bin_loss_sq_sum', 'bin_loss_sq_sum'),
+            ('_bin_count', 'bin_count'),
+        ]:
+            values = list(state.get(key, [0.0] * self.num_bins))
+            if len(values) != self.num_bins:
+                raise ValueError(f'{key} bin count does not match configuration')
+            setattr(self, attribute, [float(value) for value in values])
+
+    def runtime_metrics(self):
+        finite_values = [
+            value for value in self.variance_ema if value is not None
+        ]
+        return {
+            'loss_ema': (
+                sum(finite_values) / len(finite_values)
+                if finite_values else None
+            ),
+            'loss_reference': None,
+            'correction': self.correction(),
+            'signal_updates': self.signal_updates,
+            'adaptive_active': self.correction_is_active(),
+        }
+
+    def metadata(self):
+        return {
+            'name': self.name,
+            'enabled': True,
+            'signal': 'per_log_t_bin_normalized_loss_variance',
+            'q': self.q,
+            'k': self.k,
+            'b': self.b,
+            'variance_ema_beta': self.variance_ema_beta,
+            'variance_strength': self.variance_strength,
+            'min_gap_scale': self.min_gap_scale,
+            'num_bins': self.num_bins,
+            'warmup_updates': self.warmup_updates,
+            'p_mean': self.p_mean,
+            'p_std': self.p_std,
+            'log_t_bin_edges': self.log_t_bin_edges,
+            'variance_ema_by_bin': self.variance_ema,
+            'gap_scale_by_bin': self.gap_scales(),
+            **self.runtime_metrics(),
+        }
+
 
 def continuous_stage(cur_tick, double_ticks):
     """Legacy fractional-stage helper retained for import compatibility.
