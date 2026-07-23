@@ -251,7 +251,10 @@ class InterfaceTest(unittest.TestCase):
         self.assertAlmostEqual(float(r), 1.0)
 
     def test_available_schedules(self):
-        self.assertEqual(schedules.available_schedules(), ['adaptive_v1', 'const', 'sigmoid'])
+        self.assertEqual(
+            schedules.available_schedules(),
+            ['adaptive_v1', 'adaptive_v2_dualema', 'const', 'sigmoid'],
+        )
 
     def test_unknown_schedule_rejected(self):
         with self.assertRaises(ValueError):
@@ -271,7 +274,8 @@ class ECMLossIntegrationTest(unittest.TestCase):
     def test_loss_holds_matching_schedule_instance(self):
         for adj, cls in [('const', schedules.ConstSchedule),
                          ('sigmoid', schedules.SigmoidSchedule),
-                         ('adaptive_v1', schedules.AdaptiveV1Schedule)]:
+                         ('adaptive_v1', schedules.AdaptiveV1Schedule),
+                         ('adaptive_v2_dualema', schedules.AdaptiveV2DualEMASchedule)]:
             with self.subTest(adj=adj):
                 self.assertIsInstance(make_loss(adj).schedule, cls)
 
@@ -308,6 +312,11 @@ class ECMLossIntegrationTest(unittest.TestCase):
         required = {
             'loss_ema', 'loss_reference', 'correction', 'signal_updates',
             'adaptive_active', 'r_over_t_mean', 'gap_mean',
+            'fast_loss_ema', 'slow_loss_ema', 'raw_error', 'adaptive_updates',
+            'warmup_active', 'finite_signal', 'baseline_rho', 'adaptive_rho',
+            'baseline_gap', 'adaptive_gap', 'lower_bound_hit', 'upper_bound_hit',
+            'first_nonzero_correction_iteration', 'first_adapted_pair_iteration',
+            'nonfinite_signal_count',
         }
         fixed = make_loss('sigmoid')
         fixed_metrics = fixed.schedule_runtime_metrics()

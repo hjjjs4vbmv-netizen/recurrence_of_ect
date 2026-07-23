@@ -24,9 +24,16 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
         self.assertNotIn('schedule', params)
         self.assertEqual(params['adaptive_loss_ema_beta'], 0.9)
         self.assertEqual(params['adaptive_update_kimg'], 0.5)
-        self.assertEqual(params['adaptive_warmup_updates'], 2)
+        self.assertIsNone(params['adaptive_warmup_updates'])
         self.assertEqual(params['adaptive_max_adjust'], 0.05)
         self.assertEqual(params['adaptive_min_gap'], 1e-3)
+        self.assertEqual(params['adaptive_fast_beta'], 0.8)
+        self.assertEqual(params['adaptive_slow_beta'], 0.98)
+        self.assertEqual(params['adaptive_eps'], 1e-8)
+        self.assertEqual(
+            ct_train.make_loss_kwargs(dnnlib.EasyDict(params)).adaptive_warmup_updates,
+            2,
+        )
 
     def test_legacy_mapping_option_is_preserved(self):
         self.assertEqual(parse_train_args('--mapping=const')['mapping'], 'const')
@@ -39,7 +46,7 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
         self.assertEqual(parse_train_args('-q', '1.01')['q'], 1.01)
 
     def test_schedule_and_mapping_are_equivalent_names(self):
-        for schedule in ['const', 'sigmoid', 'adaptive_v1']:
+        for schedule in ['const', 'sigmoid', 'adaptive_v1', 'adaptive_v2_dualema']:
             with self.subTest(schedule=schedule):
                 legacy = parse_train_args('--mapping', schedule)
                 current = parse_train_args('--schedule', schedule)
@@ -86,6 +93,31 @@ class TrainingCliCompatibilityTest(unittest.TestCase):
             loss_fn.schedule.compute_r(t=t, stage=loss_fn.stage),
             loss_fn.t_to_r_sigmoid(t),
         ))
+
+    def test_adaptive_v2_defaults_and_parameters_reach_loss_config(self):
+        params = parse_train_args('--schedule', 'adaptive_v2_dualema')
+        loss_kwargs = ct_train.make_loss_kwargs(dnnlib.EasyDict(params))
+        self.assertEqual(loss_kwargs.adj, 'adaptive_v2_dualema')
+        self.assertEqual(loss_kwargs.adaptive_fast_beta, 0.8)
+        self.assertEqual(loss_kwargs.adaptive_slow_beta, 0.98)
+        self.assertEqual(loss_kwargs.adaptive_max_adjust, 0.05)
+        self.assertEqual(loss_kwargs.adaptive_warmup_updates, 8)
+        self.assertEqual(loss_kwargs.adaptive_eps, 1e-8)
+
+        params = parse_train_args(
+            '--schedule', 'adaptive_v2_dualema',
+            '--adaptive-fast-beta', '0.7',
+            '--adaptive-slow-beta', '0.95',
+            '--adaptive-max-adjust', '0.04',
+            '--adaptive-warmup-updates', '6',
+            '--adaptive-eps', '1e-7',
+        )
+        loss_kwargs = ct_train.make_loss_kwargs(dnnlib.EasyDict(params))
+        self.assertEqual(loss_kwargs.adaptive_fast_beta, 0.7)
+        self.assertEqual(loss_kwargs.adaptive_slow_beta, 0.95)
+        self.assertEqual(loss_kwargs.adaptive_max_adjust, 0.04)
+        self.assertEqual(loss_kwargs.adaptive_warmup_updates, 6)
+        self.assertEqual(loss_kwargs.adaptive_eps, 1e-7)
 
 
 if __name__ == '__main__':

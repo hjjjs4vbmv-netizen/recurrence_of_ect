@@ -2,6 +2,7 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import torch
 
@@ -10,16 +11,30 @@ from training.ct_training_loop import (
     _LEGACY_TRAIN_SUMMARY_FIELDS,
     _PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS,
     _TRAIN_SUMMARY_FIELDS,
+    _V1_TRAIN_SUMMARY_FIELDS,
     adaptive_update_interval_nimg,
     gather_adaptive_signal_window_state,
     globally_average_runtime_pairs,
     local_adaptive_signal_window_state,
+    load_training_state,
     load_and_migrate_train_summary,
 )
 from training.schedules import get_schedule
 
 
 class AdaptiveSignalUpdatesTest(unittest.TestCase):
+    def test_full_training_state_loader_explicitly_disables_weights_only(self):
+        sentinel = object()
+        with mock.patch(
+            'training.ct_training_loop.torch.load', return_value=sentinel
+        ) as mocked_load:
+            self.assertIs(load_training_state('/trusted/numbered-state.pt'), sentinel)
+        mocked_load.assert_called_once_with(
+            '/trusted/numbered-state.pt',
+            map_location=torch.device('cpu'),
+            weights_only=False,
+        )
+
     def test_default_interval_is_half_kimg(self):
         self.assertEqual(adaptive_update_interval_nimg(0.5), 500)
 
@@ -145,6 +160,31 @@ class AdaptiveSignalUpdatesTest(unittest.TestCase):
                 self.assertEqual(
                     tuple(csv.DictReader(handle).fieldnames), _TRAIN_SUMMARY_FIELDS
                 )
+
+    def test_resume_migrates_v1_telemetry_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_path = Path(tmp) / 'train_summary.csv'
+            row = {field: '' for field in _V1_TRAIN_SUMMARY_FIELDS}
+            row.update(
+                attempted_iteration='32', successful_optimizer_steps='32',
+                processed_nimg='4096', processed_kimg='4.096', loss='1.0',
+                grad_scale='65536', step_skipped='0', schedule='adaptive_v1',
+                stage='0', next_loop_cur_tick='2', correction='0.01',
+                signal_updates='8', adaptive_active='1', elapsed_sec='10',
+                peak_vram_gb='10',
+            )
+            with summary_path.open('w', newline='') as handle:
+                writer = csv.DictWriter(handle, fieldnames=_V1_TRAIN_SUMMARY_FIELDS)
+                writer.writeheader()
+                writer.writerow(row)
+
+            rows, backup_path = load_and_migrate_train_summary(summary_path)
+            self.assertEqual(backup_path, f'{summary_path}.pre-v2-telemetry.bak')
+            self.assertEqual(rows[0]['correction'], '0.01')
+            self.assertEqual(rows[0]['fast_loss_ema'], '')
+            self.assertEqual(rows[0]['applied_correction'], '')
+            with summary_path.open(newline='') as handle:
+                self.assertEqual(tuple(csv.DictReader(handle).fieldnames), _TRAIN_SUMMARY_FIELDS)
 
     def test_resume_rejects_unknown_summary_schema(self):
         with tempfile.TemporaryDirectory() as tmp:

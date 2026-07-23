@@ -14,7 +14,9 @@ from training.schedules import get_schedule
 class ECMLoss:
     def __init__(self, P_mean=-1.1, P_std=2.0, sigma_data=0.5, q=2, c=0.0, k=8.0, b=1.0, cut=4.0,
                  adj='sigmoid', adaptive_loss_ema_beta=0.9, adaptive_max_adjust=0.05,
-                 adaptive_min_gap=1e-3, adaptive_warmup_updates=2):
+                 adaptive_min_gap=1e-3, adaptive_warmup_updates=None,
+                 adaptive_fast_beta=0.80, adaptive_slow_beta=0.98,
+                 adaptive_eps=1e-8):
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
@@ -22,14 +24,25 @@ class ECMLoss:
         # t -> r entry point, dispatched through training/schedules.py.
         # 'const' / 'sigmoid' are the official fixed formulas (bit-identical
         # to the reference methods below); 'adaptive_v1' is the Role C
-        # experiment.
+        # experiments.
         schedule_kwargs = dict(q=q, k=k, b=b)
         if adj == 'adaptive_v1':
+            warmup_updates = 2 if adaptive_warmup_updates is None else adaptive_warmup_updates
             schedule_kwargs.update(
                 loss_ema_beta=adaptive_loss_ema_beta,
                 max_adjust=adaptive_max_adjust,
                 min_gap=adaptive_min_gap,
-                warmup_updates=adaptive_warmup_updates,
+                warmup_updates=warmup_updates,
+            )
+        elif adj == 'adaptive_v2_dualema':
+            warmup_updates = 8 if adaptive_warmup_updates is None else adaptive_warmup_updates
+            schedule_kwargs.update(
+                beta_fast=adaptive_fast_beta,
+                beta_slow=adaptive_slow_beta,
+                max_adjust=adaptive_max_adjust,
+                min_gap=adaptive_min_gap,
+                warmup_updates=warmup_updates,
+                eps=adaptive_eps,
             )
         self.schedule = get_schedule(adj, **schedule_kwargs)
 
@@ -52,6 +65,11 @@ class ECMLoss:
 
     def update_training_signal(self, loss):
         return self.schedule.update_training_signal(loss)
+
+    def set_training_iteration(self, iteration):
+        setter = getattr(self.schedule, 'set_training_iteration', None)
+        if setter is not None:
+            setter(iteration)
 
     def schedule_state_dict(self):
         return {
@@ -78,27 +96,58 @@ class ECMLoss:
     def schedule_runtime_metrics(self):
         """Return stable, scalar telemetry without exposing schedule internals."""
         metrics = self.schedule.runtime_metrics()
+        r_over_t_mean = float(self._runtime_r_over_t_mean)
+        gap_mean = float(self._runtime_gap_mean)
+        baseline_rho = metrics.get('baseline_rho')
+        adaptive_rho = metrics.get('adaptive_rho')
+        baseline_gap = metrics.get('baseline_gap')
+        adaptive_gap = metrics.get('adaptive_gap')
         return {
             'loss_ema': metrics['loss_ema'],
             'loss_reference': metrics['loss_reference'],
             'correction': float(metrics['correction']),
             'signal_updates': int(metrics['signal_updates']),
             'adaptive_active': bool(metrics['adaptive_active']),
-            'r_over_t_mean': float(self._runtime_r_over_t_mean),
-            'gap_mean': float(self._runtime_gap_mean),
+            'r_over_t_mean': r_over_t_mean,
+            'gap_mean': gap_mean,
+            'fast_loss_ema': metrics.get('fast_loss_ema'),
+            'slow_loss_ema': metrics.get('slow_loss_ema'),
+            'raw_error': float(metrics.get('raw_error', 0.0)),
+            'adaptive_updates': int(metrics.get('adaptive_updates', 0)),
+            'warmup_active': bool(metrics.get('warmup_active', False)),
+            'finite_signal': bool(metrics.get('finite_signal', True)),
+            'baseline_rho': r_over_t_mean if baseline_rho is None else baseline_rho,
+            'adaptive_rho': r_over_t_mean if adaptive_rho is None else adaptive_rho,
+            'baseline_gap': gap_mean if baseline_gap is None else baseline_gap,
+            'adaptive_gap': gap_mean if adaptive_gap is None else adaptive_gap,
+            'lower_bound_hit': bool(metrics.get('lower_bound_hit', False)),
+            'upper_bound_hit': bool(metrics.get('upper_bound_hit', False)),
+            'first_nonzero_correction_iteration': metrics.get(
+                'first_nonzero_correction_iteration'
+            ),
+            'first_adapted_pair_iteration': metrics.get('first_adapted_pair_iteration'),
+            'nonfinite_signal_count': int(metrics.get('nonfinite_signal_count', 0)),
         }
 
     def _record_schedule_runtime_pair(self, t, r):
         with torch.no_grad():
             valid = torch.isfinite(t) & torch.isfinite(r) & (t > 0)
-            if not bool(valid.any()):
+            denominator = torch.where(valid, t, torch.ones_like(t)).to(torch.float64)
+            ratio = torch.where(
+                valid, r.to(torch.float64) / denominator, torch.zeros_like(denominator)
+            )
+            totals = torch.stack([
+                ratio.sum(),
+                (torch.where(valid, (t - r).to(torch.float64) / denominator,
+                             torch.zeros_like(denominator))).sum(),
+                valid.sum().to(torch.float64),
+            ]).cpu().tolist()
+            if totals[2] == 0:
                 self._runtime_r_over_t_mean = float('nan')
                 self._runtime_gap_mean = float('nan')
                 return
-            valid_t = t[valid].to(torch.float64)
-            valid_r = r[valid].to(torch.float64)
-            self._runtime_r_over_t_mean = float((valid_r / valid_t).mean().cpu())
-            self._runtime_gap_mean = float(((valid_t - valid_r) / valid_t).mean().cpu())
+            self._runtime_r_over_t_mean = totals[0] / totals[2]
+            self._runtime_gap_mean = totals[1] / totals[2]
 
     # Official fixed t->r formulas, kept verbatim as the parity reference for
     # tests/test_schedules.py; the training path dispatches through

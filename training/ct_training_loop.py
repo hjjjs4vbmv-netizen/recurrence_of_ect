@@ -58,7 +58,7 @@ _PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS = (
     'peak_vram_gb',
 )
 
-_TRAIN_SUMMARY_FIELDS = (
+_V1_TRAIN_SUMMARY_FIELDS = (
     'attempted_iteration',
     'successful_optimizer_steps',
     'processed_nimg',
@@ -80,6 +80,34 @@ _TRAIN_SUMMARY_FIELDS = (
     'gap_mean',
     'elapsed_sec',
     'peak_vram_gb',
+)
+
+_TRAIN_SUMMARY_FIELDS = (
+    *_V1_TRAIN_SUMMARY_FIELDS,
+    # Adaptive v2 audit fields. These are deliberately appended so all
+    # legacy columns retain their names and meanings.
+    'iteration',
+    'training_seed',
+    'cur_kimg',
+    'schedule_name',
+    'signal_update_applied',
+    'raw_loss',
+    'fast_loss_ema',
+    'slow_loss_ema',
+    'raw_error',
+    'adaptive_updates',
+    'warmup_active',
+    'finite_signal',
+    'baseline_rho',
+    'adaptive_rho',
+    'baseline_gap',
+    'adaptive_gap',
+    'lower_bound_hit',
+    'upper_bound_hit',
+    'first_nonzero_correction_iteration',
+    'first_adapted_pair_iteration',
+    'nonfinite_signal_count',
+    'applied_correction',
 )
 
 #----------------------------------------------------------------------------
@@ -104,6 +132,8 @@ def load_and_migrate_train_summary(summary_path):
         backup_path = f'{summary_path}.pre-telemetry.bak'
     elif fieldnames == _PRE_NEXT_LOOP_TICK_TRAIN_SUMMARY_FIELDS:
         backup_path = f'{summary_path}.pre-next-loop-tick.bak'
+    elif fieldnames == _V1_TRAIN_SUMMARY_FIELDS:
+        backup_path = f'{summary_path}.pre-v2-telemetry.bak'
     else:
         raise RuntimeError(
             f'resume requested but {summary_path} has an unsupported schema; '
@@ -278,8 +308,11 @@ def globally_average_runtime_pairs(metric_batches, device):
     gap_values = [float(metrics['gap_mean']) for metrics in metric_batches]
     r_values = [value for value in r_values if math.isfinite(value)]
     gap_values = [value for value in gap_values if math.isfinite(value)]
+    correction_values = [float(metrics.get('correction', 0.0)) for metrics in metric_batches]
+    correction_values = [value for value in correction_values if math.isfinite(value)]
     totals = torch.tensor(
-        [sum(r_values), len(r_values), sum(gap_values), len(gap_values)],
+        [sum(r_values), len(r_values), sum(gap_values), len(gap_values),
+         sum(correction_values), len(correction_values)],
         dtype=torch.float64,
         device=device,
     )
@@ -290,7 +323,25 @@ def globally_average_runtime_pairs(metric_batches, device):
     return {
         'r_over_t_mean': float(totals[0] / r_count) if r_count > 0 else float('nan'),
         'gap_mean': float(totals[2] / gap_count) if gap_count > 0 else float('nan'),
+        'applied_correction': (
+            float(totals[4] / float(totals[5])) if float(totals[5]) > 0
+            else float('nan')
+        ),
     }
+
+
+def load_training_state(path):
+    """Load a trusted full training state across PyTorch 2.6+ defaults.
+
+    Numbered states are created locally by this training loop and contain
+    optimizer plus persistent model objects, so they are intentionally not
+    weights-only archives.
+    """
+    return torch.load(
+        path,
+        map_location=torch.device('cpu'),
+        weights_only=False,
+    )
 
 
 #----------------------------------------------------------------------------
@@ -487,10 +538,11 @@ def training_loop(
     resumed_cur_tick = None
     resumed_tick_start_nimg = None
     resumed_adaptive_signal_window_state = None
+    resumed_loss_fn_state_present = False
     elapsed_base_sec = 0.0
     if resume_state_dump:
         dist.print0(f'Loading training state from "{resume_state_dump}"...')
-        data = torch.load(resume_state_dump, map_location=torch.device('cpu'))
+        data = load_training_state(resume_state_dump)
         misc.copy_params_and_buffers(src_module=data['net'], dst_module=net, require_all=True)
         optimizer.load_state_dict(data['optimizer_state'])
         if 'cur_nimg' not in data:
@@ -507,7 +559,14 @@ def training_loop(
             resumed_tick_start_nimg = int(data['tick_start_nimg'])
         elapsed_base_sec = float(data.get('elapsed_sec', 0.0))
         if hasattr(loss_fn, 'load_schedule_state_dict') and 'loss_fn_state' in data:
-            loss_fn.load_schedule_state_dict(data['loss_fn_state'])
+            saved_loss_fn_state = data['loss_fn_state']
+            state_loaded = bool(loss_fn.load_schedule_state_dict(saved_loss_fn_state))
+            resumed_loss_fn_state_present = bool(
+                state_loaded
+                and isinstance(saved_loss_fn_state.get('schedule'), dict)
+                and saved_loss_fn_state['schedule'].get('controller_type')
+                == 'dualema_additive_rho'
+            )
         if 'adaptive_signal_window_state' in data:
             resumed_adaptive_signal_window_state = data['adaptive_signal_window_state']
         if enable_amp:
@@ -570,17 +629,20 @@ def training_loop(
         schedule_name = loss_kwargs.get('adj', 'unknown')
     adaptive_signal_window = (
         AdaptiveSignalWindow(adaptive_update_kimg, start_nimg=cur_nimg)
-        if schedule_name == 'adaptive_v1' else None
+        if schedule_name in ('adaptive_v1', 'adaptive_v2_dualema') else None
     )
     if adaptive_signal_window is not None and resume_state_dump:
-        if resumed_adaptive_signal_window_state is None:
+        if resumed_adaptive_signal_window_state is None and not (
+            schedule_name == 'adaptive_v2_dualema' and not resumed_loss_fn_state_present
+        ):
             raise RuntimeError(
                 f'resume training-state missing adaptive_signal_window_state: {resume_state_dump}; '
                 'cannot exactly resume adaptive loss aggregation'
             )
-        adaptive_signal_window.load_state_dict(
-            local_adaptive_signal_window_state(resumed_adaptive_signal_window_state)
-        )
+        if resumed_adaptive_signal_window_state is not None:
+            adaptive_signal_window.load_state_dict(
+                local_adaptive_signal_window_state(resumed_adaptive_signal_window_state)
+            )
         if adaptive_signal_window.next_update_nimg <= cur_nimg:
             raise RuntimeError(
                 'resumed adaptive signal window is due before or at the restored progress: '
@@ -712,6 +774,8 @@ def training_loop(
     while True:
 
         # Accumulate gradients.
+        if hasattr(loss_fn, 'set_training_iteration'):
+            loss_fn.set_training_iteration(attempted_iteration + 1)
         optimizer.zero_grad(set_to_none=True)
         loss_batches = []
         schedule_metric_batches = []
@@ -789,12 +853,17 @@ def training_loop(
         # Advance iteration-local state. Adaptive updates intentionally happen
         # here, before the maintenance early-continue below.
         cur_nimg += batch_size
+        raw_signal_loss = None
+        signal_update_applied = None
+        finite_signal = None
         if adaptive_signal_window is not None:
             adaptive_signal_window.add(loss_sum, loss_count)
             signal_window = adaptive_signal_window.pop_if_due(cur_nimg)
             if signal_window is not None:
                 signal_loss = globally_average_adaptive_loss(*signal_window, device=device)
-                loss_fn.update_training_signal(signal_loss)
+                raw_signal_loss = signal_loss
+                finite_signal = bool(loss_fn.update_training_signal(signal_loss))
+                signal_update_applied = finite_signal
 
         schedule_runtime_metrics = loss_fn.schedule_runtime_metrics()
         schedule_runtime_metrics.update(runtime_pair_metrics)
@@ -807,6 +876,15 @@ def training_loop(
         training_stats.report0('Schedule/adaptive_active', int(schedule_runtime_metrics['adaptive_active']))
         training_stats.report0('Schedule/r_over_t_mean', schedule_runtime_metrics['r_over_t_mean'])
         training_stats.report0('Schedule/gap_mean', schedule_runtime_metrics['gap_mean'])
+        if schedule_runtime_metrics['fast_loss_ema'] is not None:
+            training_stats.report0('Schedule/fast_loss_ema', schedule_runtime_metrics['fast_loss_ema'])
+        if schedule_runtime_metrics['slow_loss_ema'] is not None:
+            training_stats.report0('Schedule/slow_loss_ema', schedule_runtime_metrics['slow_loss_ema'])
+        training_stats.report0('Schedule/raw_error', schedule_runtime_metrics['raw_error'])
+        training_stats.report0('Schedule/adaptive_updates', schedule_runtime_metrics['adaptive_updates'])
+        training_stats.report0('Schedule/warmup_active', int(schedule_runtime_metrics['warmup_active']))
+        training_stats.report0('Schedule/lower_bound_hit', int(schedule_runtime_metrics['lower_bound_hit']))
+        training_stats.report0('Schedule/upper_bound_hit', int(schedule_runtime_metrics['upper_bound_hit']))
 
         # Record the exact state that the following loop iteration will see.
         # This cannot be derived reliably from image count: the first iteration
@@ -841,6 +919,31 @@ def training_loop(
                 'gap_mean': f"{schedule_runtime_metrics['gap_mean']:.12g}",
                 'elapsed_sec': f'{elapsed_sec:.6f}',
                 'peak_vram_gb': f'{peak_vram_gb:.6f}',
+                'iteration': attempted_iteration,
+                'training_seed': seed,
+                'cur_kimg': f'{cur_nimg / 1e3:.6f}',
+                'schedule_name': schedule_name,
+                'signal_update_applied': '' if signal_update_applied is None else int(signal_update_applied),
+                'raw_loss': '' if raw_signal_loss is None else f'{raw_signal_loss:.12g}',
+                'fast_loss_ema': '' if schedule_runtime_metrics['fast_loss_ema'] is None else f"{schedule_runtime_metrics['fast_loss_ema']:.12g}",
+                'slow_loss_ema': '' if schedule_runtime_metrics['slow_loss_ema'] is None else f"{schedule_runtime_metrics['slow_loss_ema']:.12g}",
+                'raw_error': f"{schedule_runtime_metrics['raw_error']:.12g}",
+                'adaptive_updates': schedule_runtime_metrics['adaptive_updates'],
+                'warmup_active': int(schedule_runtime_metrics['warmup_active']),
+                'finite_signal': '' if finite_signal is None else int(finite_signal),
+                'baseline_rho': '' if schedule_runtime_metrics['baseline_rho'] is None else f"{schedule_runtime_metrics['baseline_rho']:.12g}",
+                'adaptive_rho': '' if schedule_runtime_metrics['adaptive_rho'] is None else f"{schedule_runtime_metrics['adaptive_rho']:.12g}",
+                'baseline_gap': '' if schedule_runtime_metrics['baseline_gap'] is None else f"{schedule_runtime_metrics['baseline_gap']:.12g}",
+                'adaptive_gap': '' if schedule_runtime_metrics['adaptive_gap'] is None else f"{schedule_runtime_metrics['adaptive_gap']:.12g}",
+                'lower_bound_hit': int(schedule_runtime_metrics['lower_bound_hit']),
+                'upper_bound_hit': int(schedule_runtime_metrics['upper_bound_hit']),
+                'first_nonzero_correction_iteration': '' if schedule_runtime_metrics['first_nonzero_correction_iteration'] is None else schedule_runtime_metrics['first_nonzero_correction_iteration'],
+                'first_adapted_pair_iteration': '' if schedule_runtime_metrics['first_adapted_pair_iteration'] is None else schedule_runtime_metrics['first_adapted_pair_iteration'],
+                'nonfinite_signal_count': schedule_runtime_metrics['nonfinite_signal_count'],
+                # Pair metrics were captured before the end-of-step signal
+                # update. `correction` is the next controller state;
+                # `applied_correction` is what produced this row's t/r pair.
+                'applied_correction': f"{runtime_pair_metrics['applied_correction']:.12g}",
             })
             train_summary_csv.flush()
 
