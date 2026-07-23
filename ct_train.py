@@ -38,7 +38,11 @@ class CommaSeparatedList(click.ParamType):
 
 
 def normalize_schedule_name(_ctx, _param, value):
-    return 'adaptive_v1' if value == 'adaptive-v1' else value
+    aliases = {
+        'adaptive-v1': 'adaptive_v1',
+        'adaptive-variance-v1': 'adaptive_variance_v1',
+    }
+    return aliases.get(value, value)
 
 
 def make_loss_kwargs(opts):
@@ -55,6 +59,10 @@ def make_loss_kwargs(opts):
         adaptive_warmup_updates=opts.adaptive_warmup_updates,
         adaptive_max_adjust=opts.adaptive_max_adjust,
         adaptive_min_gap=opts.adaptive_min_gap,
+        adaptive_variance_ema_beta=opts.adaptive_variance_ema_beta,
+        adaptive_variance_strength=opts.adaptive_variance_strength,
+        adaptive_min_gap_scale=opts.adaptive_min_gap_scale,
+        adaptive_num_bins=opts.adaptive_num_bins,
     )
 
 #----------------------------------------------------------------------------
@@ -69,6 +77,7 @@ def make_loss_kwargs(opts):
 @click.option('--precond',       help='Preconditioning & loss function', metavar='ect',             type=click.Choice(['ect']), default='ect', show_default=True)
 
 # Hyperparameters.
+@click.option('--max-steps',     help='Optional exact attempted-iteration limit for diagnostic runs', metavar='INT', type=click.IntRange(min=1))
 @click.option('--duration',      help='Training duration', metavar='MIMG',                          type=click.FloatRange(min=0, min_open=True), default=200, show_default=True)
 @click.option('--batch',         help='Total batch size', metavar='INT',                            type=click.IntRange(min=1), default=512, show_default=True)
 @click.option('--batch-gpu',     help='Limit batch size per GPU', metavar='INT',                    type=click.IntRange(min=1))
@@ -88,7 +97,10 @@ def make_loss_kwargs(opts):
 
 @click.option('--schedule', '--mapping', 'mapping',
               help='Type of t-to-r schedule; --mapping is a compatibility alias', metavar='STR',
-              type=click.Choice(['const', 'sigmoid', 'adaptive_v1', 'adaptive-v1']),
+              type=click.Choice([
+                  'const', 'sigmoid', 'adaptive_v1', 'adaptive-v1',
+                  'adaptive_variance_v1', 'adaptive-variance-v1',
+              ]),
               callback=normalize_schedule_name, default='sigmoid', show_default=True)
 @click.option('--adaptive-loss-ema-beta', help='EMA beta for adaptive_v1 loss signal', metavar='FLOAT',
               type=click.FloatRange(min=0, max=1, max_open=True), default=0.9, show_default=True)
@@ -100,6 +112,14 @@ def make_loss_kwargs(opts):
               type=click.FloatRange(min=0, max=1), default=0.05, show_default=True)
 @click.option('--adaptive-min-gap', help='Minimum relative gap (t-r)/t for adaptive_v1', metavar='FLOAT',
               type=click.FloatRange(min=0, max=1, min_open=True, max_open=True), default=1e-3, show_default=True)
+@click.option('--adaptive-variance-ema-beta', help='EMA beta for per-bin normalized loss variance', metavar='FLOAT',
+              type=click.FloatRange(min=0, max=1, max_open=True), default=0.9, show_default=True)
+@click.option('--adaptive-variance-strength', help='Strength lambda in gap/(1+lambda*variance)', metavar='FLOAT',
+              type=click.FloatRange(min=0), default=1.0, show_default=True)
+@click.option('--adaptive-min-gap-scale', help='Minimum multiplicative scale applied to the sigmoid gap', metavar='FLOAT',
+              type=click.FloatRange(min=0, max=1, min_open=True), default=0.5, show_default=True)
+@click.option('--adaptive-num-bins', help='Number of equal-probability log-t variance bins', metavar='INT',
+              type=click.IntRange(min=2), default=4, show_default=True)
 @click.option('--double',        help='How often to reduce dt', metavar='TICKS',                    type=click.IntRange(min=1), default=500, show_default=True)
 
 @click.option('-q',              help='Decay Factor', metavar='FLOAT',                              type=click.FloatRange(min=1, min_open=True), default=2.0, show_default=True)
@@ -200,7 +220,7 @@ def main(**kwargs):
     c.total_kimg = max(int(opts.duration * 1000), 1)
     c.ema_halflife_kimg = int(opts.ema * 1000) if opts.ema is not None else opts.ema
     c.ema_beta = opts.ema_beta
-    c.update(batch_size=opts.batch, batch_gpu=opts.batch_gpu)
+    c.update(batch_size=opts.batch, batch_gpu=opts.batch_gpu, max_steps=opts.max_steps)
     c.update(loss_scaling=opts.ls, cudnn_benchmark=opts.bench, enable_tf32=opts.tf32, enable_amp=opts.enable_amp)
     c.update(kimg_per_tick=opts.tick, snapshot_ticks=opts.snap, state_dump_ticks=opts.dump, ckpt_ticks=opts.ckpt,
              double_ticks=opts.double, adaptive_update_kimg=opts.adaptive_update_kimg)
