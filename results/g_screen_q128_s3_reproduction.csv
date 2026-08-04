@@ -1,0 +1,9 @@
+run_id,g,gpu,nfe,kid5k_full,fid5k_full,kid_drift_pct_vs_primary,fid_drift_pct_vs_primary,evidence_class
+primary,0.9,0,1,0.245318070,245.735457,,,5k_screening_proxy
+swapped_gpu_repro,0.9,1,1,0.24805580079555511,247.84675287357388,1.115992,0.859174,5k_screening_proxy
+primary,0.9,0,2,0.039405625,52.138296,,,5k_screening_proxy
+swapped_gpu_repro,0.9,1,2,0.03982583433389664,52.441962474817196,1.066369,0.582425,5k_screening_proxy
+primary,1.0,1,1,0.3247685134410858,317.01762434835075,,,5k_screening_proxy
+swapped_gpu_repro,1.0,0,1,0.32526856660842896,317.16364557573206,0.153972,0.046061,5k_screening_proxy
+primary,1.0,1,2,0.07131069898605347,87.92304798504748,,,5k_screening_proxy
+swapped_gpu_repro,1.0,0,2,0.0708608403801918,87.45681010694095,-0.630843,-0.530279,5k_screening_proxy

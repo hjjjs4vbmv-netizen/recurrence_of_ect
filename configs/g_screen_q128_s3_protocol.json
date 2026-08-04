@@ -1,0 +1,51 @@
+{
+  "protocol_id": "g-screen-q128-s3-5k-v1",
+  "git_commit": "f53910ba7ed1890b05d1da6f8a9b616d03e8e576",
+  "training": {
+    "q": 128,
+    "seed": 3,
+    "budget_kimg": 256,
+    "gap_scales": [0.9, 1.0, 1.05, 1.1, 1.2, 1.3],
+    "batch": 128,
+    "batch_gpu": 16,
+    "optimizer": "RAdam",
+    "learning_rate": 0.0001,
+    "dropout": 0.2,
+    "c": 0,
+    "fp16": true,
+    "amp": true,
+    "teacher": "edm-cifar10-32x32-uncond-vp.pkl"
+  },
+  "evaluation": {
+    "evidence_class": "5k_screening_proxy",
+    "metrics": ["kid5k_full", "fid5k_full"],
+    "sample_seeds": "0-4999",
+    "metric_seed": 20260730,
+    "precision": "fp32",
+    "nfe": [1, 2],
+    "nfe2_mid_t": 0.821,
+    "metric_repeats": 1,
+    "gpu_count_per_cell": 1
+  },
+  "swapped_gpu_reproduction": {
+    "purpose": "test whether the g=0.9 versus g=1.0 discontinuity is caused by GPU assignment or a single AMP trajectory",
+    "arms": [
+      {
+        "g": 0.9,
+        "primary_gpu": 0,
+        "reproduction_gpu": 1
+      },
+      {
+        "g": 1.0,
+        "primary_gpu": 1,
+        "reproduction_gpu": 0
+      }
+    ]
+  },
+  "protocol_deviations": [
+    "Only the final 256 kimg checkpoint was retained; planned 64 and 128 kimg checkpoints are unavailable.",
+    "Raw residual, separately named weighted loss, and gradient RMS were not logged.",
+    "AMP skipped-step counts differ by approximately one optimizer step across some arms.",
+    "All reported FID-5k and KID-5k values are screening proxies, not formal 50k benchmark results."
+  ]
+}
