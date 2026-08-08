@@ -1,0 +1,162 @@
+{
+  "schema_version": 2,
+  "experiment_id": "gap_lr_matched_q128_s3_v1",
+  "repository": "hjjjs4vbmv-netizen/recurrence_of_ect",
+  "branch": "role-e/gap-lr-matched",
+  "source_policy": {
+    "training_code_commit": "2357bb1d2531a343bdb4397f5a08f4d42a2d135b",
+    "protocol_commit": null,
+    "protocol_commit_resolution": "audit_receipt.source.protocol_commit must equal HEAD",
+    "training_paths": [
+      "ct_train.py",
+      "training"
+    ]
+  },
+  "config": "configs/gap_lr_matched_matrix.json",
+  "protocol": "docs/GAP_LR_MATCHED_PROTOCOL.md",
+  "formal_launch_status": "BLOCKED",
+  "formal_launch_blockers": [
+    "No passed machine-validated GFCT audit receipt",
+    "Fresh-linearized c0_star receipt is pending",
+    "Nonzero-state RAdam quotient/history-gauge receipt is pending"
+  ],
+  "launch_gate": {
+    "environment_variable": "GAP_LR_AUDIT_RECEIPT",
+    "validator": "scripts/validate_gap_lr_audit_receipt.py",
+    "manual_collaborator_pass_allowed": false,
+    "free_form_c0_star_allowed": false,
+    "fail_closed": true
+  },
+  "smoke_test": {
+    "status": "PASS",
+    "formal_evidence": false,
+    "arms_checked": [
+      "A",
+      "B"
+    ],
+    "processed_kimg": {
+      "A": 1.024,
+      "B": 1.024
+    },
+    "attempted_iterations": {
+      "A": 8,
+      "B": 8
+    },
+    "successful_optimizer_steps": {
+      "A": 1,
+      "B": 1
+    },
+    "amp_skip_sequence": {
+      "A": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0
+      ],
+      "B": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0
+      ]
+    },
+    "grad_scale_sequence": [
+      65536,
+      32768,
+      16384,
+      8192,
+      4096,
+      2048,
+      1024,
+      512
+    ],
+    "first_common_non_skipped_attempt": 8,
+    "numbered_network_snapshots": true,
+    "numbered_training_states": true,
+    "scope": "launcher/checkpoint sanity only; insufficient for optimizer mechanism gate",
+    "exit_warning": "NCCL destroy_process_group warning observed after normal completion; not a training failure"
+  },
+  "required_external_evidence": {
+    "fresh_linearized_control": {
+      "status": "PENDING",
+      "control_name": "fresh-linearized matched control",
+      "c0_definition": "dot(delta_1_3,delta_1_0)/dot(delta_1_3,delta_1_3)",
+      "claim_boundary": "initialization-local only; not optimizer-state-aware or trajectory matched"
+    },
+    "optimizer_mechanism_gate": {
+      "status": "PENDING",
+      "minimum_audited_states": 3,
+      "minimum_successful_optimizer_steps": 6,
+      "same_nonzero_radam_gradscaler_state": true,
+      "only_current_gap_changes": true,
+      "required_metrics": [
+        "raw_a_star",
+        "raw_residual",
+        "update_s_star",
+        "update_c_star",
+        "R_opt",
+        "h_update",
+        "h_moment_ideal",
+        "off_support_energy",
+        "H_exact",
+        "H_thresholded"
+      ]
+    }
+  },
+  "jobs": [
+    {
+      "arm": "A",
+      "run_id": "arm_a_g1_0_lr_fixed_s3",
+      "gap_scale": 1,
+      "learning_rate": 0.0001,
+      "status": "PREPARED_PENDING_MACHINE_GATE"
+    },
+    {
+      "arm": "B",
+      "run_id": "arm_b_g1_3_lr_fixed_s3",
+      "gap_scale": 1.3,
+      "learning_rate": 0.0001,
+      "status": "PREPARED_PENDING_MACHINE_GATE"
+    },
+    {
+      "arm": "C",
+      "run_id": "arm_c_g1_3_lr_matched_s3",
+      "gap_scale": 1.3,
+      "learning_rate": null,
+      "status": "BLOCKED_PENDING_VALIDATED_RECEIPT",
+      "learning_rate_expression": "audit_receipt.fresh_linearized_control.c0_star*0.0001",
+      "control_name": "fresh-linearized matched control"
+    }
+  ],
+  "longitudinal_audit": {
+    "checkpoint_kimg": [
+      32,
+      64,
+      128,
+      256
+    ],
+    "identical_counterfactual_state_required": true,
+    "status": "PRE_REGISTERED_PENDING_FORMAL_CHECKPOINTS"
+  },
+  "runtime_provenance": {
+    "audit_receipt_sha256": null,
+    "dataset_sha256": null,
+    "transfer_checkpoint_sha256": null,
+    "config_sha256": null,
+    "protocol_commit": null,
+    "training_code_commit": null,
+    "launch_timestamp_utc": null,
+    "host_identifier": null,
+    "cuda_visible_devices": null,
+    "master_ports": null
+  },
+  "matching_claim": "Arm C is fresh-linearized at the common initialization; no entire-trajectory or optimizer-state-aware matching claim."
+}
